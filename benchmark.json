@@ -62,6 +62,14 @@
       "baseline": "omlx-mxfp4-base"
     },
     {
+      "id": "omlx-mxfp4-dflash-q4",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-MXFP4",
+      "speculative": "dflash",
+      "draft_quant_bits": 4,
+      "baseline": "omlx-mxfp4-base"
+    },
+    {
       "id": "omlx-optiq-base",
       "engine": "omlx",
       "model": "Qwen3.6-27B-OptiQ-4bit",

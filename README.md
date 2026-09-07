@@ -10,7 +10,7 @@ The default matrix is:
 | Target checkpoint | Baseline | Speculative path |
 |---|---|---|
 | Uzu Mirai-M-4 | unavailable in public CLI | bundled Mirai-M speculator |
-| oMLX MXFP4 | target only | `z-lab/Qwen3.6-27B-DFlash` |
+| oMLX MXFP4 | target only | DFlash in BF16 and 4-bit draft modes |
 | oMLX OptiQ-4bit | target only | DFlash and checkpoint's native Lightning MTP |
 
 Uzu 0.5.26 treats the bundled speculator as a required checkpoint artifact and
@@ -150,5 +150,7 @@ High acceptance does not guarantee a speedup—the draft and verification work
 can cost more than the target passes they save. Treat wall-clock gain as the
 deciding result and the efficiency counters as the explanation.
 
-The OptiQ DFlash variant loads its draft at 4-bit to stay within a 32 GB unified
-memory budget. MXFP4 keeps the BF16 draft because that pair fits comfortably.
+The OptiQ and `omlx-mxfp4-dflash-q4` variants load DFlash at 4-bit, providing
+the closest target-format comparison within a 32 GB unified-memory budget. The
+original `omlx-mxfp4-dflash` BF16-draft variant remains available as a diagnostic
+control; it is slower and reaches the long-context RAM boundary earlier.
