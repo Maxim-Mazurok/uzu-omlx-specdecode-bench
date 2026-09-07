@@ -138,6 +138,33 @@ results and practical RAM limits.
 Each timestamped run contains `REPORT.md`, CSV/JSONL results, an effective
 configuration, system manifest, exact server commands, and per-variant logs.
 
+## Continuous deterministic sweep
+
+Run an indefinite seeded sweep across Uzu, OptiQ+DFlash-4bit, and
+MXFP4+DFlash-4bit:
+
+```sh
+caffeinate -dimsu python3 -u continuous_bench.py \
+  --campaign-dir continuous-results/main \
+  --seed 20260908 \
+  --min-context 69 \
+  --max-context 50000 \
+  --output-tokens 512 \
+  --delay-seconds 60
+```
+
+One random context length is generated per round and used by all three engines.
+Engine order rotates deterministically between rounds. The campaign writes an
+append-only `events.jsonl`, per-attempt console logs, the runner's complete raw
+result directories/server logs, exact prompt definitions, and an atomically
+updated `chart.html`. The chart refreshes itself every 15 seconds when open.
+
+On a RAM safety stop, `specbench.py` terminates only the active model server;
+the continuous runner records the failure, waits for the configured delay, and
+continues with the other engines. Press Ctrl-C to stop. Running the exact same
+command resumes from the next attempt and preserves the deterministic schedule.
+Use `--max-rounds N` for a finite campaign.
+
 ## Interpretation
 
 Speculative efficiency is reported in two distinct ways:
