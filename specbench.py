@@ -10,6 +10,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import signal
 import socket
 import statistics
@@ -34,6 +35,15 @@ DFLASH_RE = re.compile(
     r"DFlash generation complete: (?P<tokens>\d+) tokens, "
     r"(?P<tps>[\d.]+) tok/s, acceptance=(?P<rate>[\d.]+)%, "
     r"cycles=(?P<cycles>\d+)"
+)
+MTP_NORM_SUFFIXES = (
+    "input_layernorm.weight",
+    "post_attention_layernorm.weight",
+    "q_norm.weight",
+    "k_norm.weight",
+    "pre_fc_norm_hidden.weight",
+    "pre_fc_norm_embedding.weight",
+    "norm.weight",
 )
 
 
@@ -123,7 +133,7 @@ def omlx_settings(variant: dict[str, Any], draft: Path) -> dict[str, Any]:
             }
         )
     if spec == "mtp":
-        settings["mtp_num_draft_tokens"] = 3
+        settings["mtp_num_draft_tokens"] = int(variant.get("mtp_draft_tokens", 2))
     return {"version": 1, "models": {variant["model"]: settings}}
 
 
@@ -144,6 +154,49 @@ def safetensor_keys(path: Path) -> list[str]:
     return [key for key in header if key != "__metadata__"]
 
 
+def _float_to_bfloat16(value: float) -> int:
+    """Round a Python float to bfloat16 using round-to-nearest-even."""
+    bits = struct.unpack("<I", struct.pack("<f", value))[0]
+    return ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16) & 0xFFFF
+
+
+def patch_raw_mtp_norms(source: Path, target: Path) -> list[str]:
+    """Copy an OptiQ MTP sidecar and convert raw HF RMSNorms to MLX form.
+
+    OptiQ's bundled head is a raw-HF sidecar next to an already-sanitized MLX
+    backbone. oMLX's indexed-shard path only repairs a subset of these norms.
+    Patch the per-run copy so every MTP norm follows MLX's ``weight + 1``
+    convention, without mutating the downloaded model.
+    """
+    shutil.copy2(source, target)
+    with target.open("r+b") as handle:
+        header_size = struct.unpack("<Q", handle.read(8))[0]
+        header = json.loads(handle.read(header_size))
+        data_start = 8 + header_size
+        patched: list[str] = []
+        for key, metadata in header.items():
+            if key == "__metadata__" or not key.startswith("mtp."):
+                continue
+            if not key.endswith(MTP_NORM_SUFFIXES):
+                continue
+            if metadata.get("dtype") != "BF16" or len(metadata.get("shape", [])) != 1:
+                raise RuntimeError(f"unsupported MTP norm encoding for {key}")
+            start, end = metadata["data_offsets"]
+            handle.seek(data_start + int(start))
+            raw = handle.read(int(end) - int(start))
+            if len(raw) % 2:
+                raise RuntimeError(f"invalid BF16 payload size for {key}")
+            values = struct.unpack(f"<{len(raw) // 2}H", raw)
+            shifted = []
+            for bits in values:
+                value = struct.unpack("<f", struct.pack("<I", bits << 16))[0]
+                shifted.append(_float_to_bfloat16(value + 1.0))
+            handle.seek(data_start + int(start))
+            handle.write(struct.pack(f"<{len(shifted)}H", *shifted))
+            patched.append(key)
+    return patched
+
+
 def omlx_model_view(
     model_dir: Path, variant: dict[str, Any], destination: Path
 ) -> Path:
@@ -153,7 +206,7 @@ def omlx_model_view(
     target.mkdir(parents=True, exist_ok=True)
     patched_names = {"config.json"}
     if variant["speculative"] == "mtp":
-        patched_names.add("model.safetensors.index.json")
+        patched_names.update({"model.safetensors.index.json", "mtp.safetensors"})
     for child in source.iterdir():
         if child.name in patched_names:
             continue
@@ -186,6 +239,11 @@ def omlx_model_view(
         mtp_path = source / "mtp.safetensors"
         if not index_path.is_file() or not mtp_path.is_file():
             raise RuntimeError("OptiQ native MTP requires an index and mtp.safetensors")
+        patched_norms = patch_raw_mtp_norms(mtp_path, target / "mtp.safetensors")
+        if len(patched_norms) != 7:
+            raise RuntimeError(
+                f"expected seven Qwen3.6 MTP norms, patched {len(patched_norms)}"
+            )
         index = json.loads(index_path.read_text())
         for key in safetensor_keys(mtp_path):
             index.setdefault("weight_map", {})[key] = "mtp.safetensors"
@@ -386,6 +444,7 @@ def parse_spec_log(chunk: str) -> dict[str, Any]:
 def memory_snapshot(pid: int) -> dict[str, int | None]:
     rss_bytes: int | None = None
     swap_bytes: int | None = None
+    free_percent: int | None = None
     try:
         value = subprocess.run(
             ["/bin/ps", "-o", "rss=", "-p", str(pid)],
@@ -409,7 +468,70 @@ def memory_snapshot(pid: int) -> dict[str, int | None]:
             swap_bytes = int(float(match.group(1)) * multiplier)
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
-    return {"server_rss_bytes": rss_bytes, "system_swap_used_bytes": swap_bytes}
+    try:
+        value = subprocess.run(
+            ["/usr/bin/memory_pressure"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        match = re.search(r"memory free percentage: (\d+)%", value)
+        if match:
+            free_percent = int(match.group(1))
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return {
+        "server_rss_bytes": rss_bytes,
+        "system_swap_used_bytes": swap_bytes,
+        "system_memory_free_percent": free_percent,
+    }
+
+
+def wait_for_memory(common: dict[str, Any], phase: str) -> dict[str, int | None]:
+    minimum = int(common.get("min_memory_free_percent", 0))
+    timeout = float(common.get("memory_recovery_timeout_seconds", 0))
+    deadline = time.monotonic() + timeout
+    while True:
+        snapshot = memory_snapshot(os.getpid())
+        free_percent = snapshot["system_memory_free_percent"]
+        if free_percent is None or free_percent >= minimum:
+            return snapshot
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"memory did not recover before {phase}: {free_percent}% free "
+                f"(requires {minimum}%)"
+            )
+        print(
+            f"  RAM gate before {phase}: {free_percent}% free; waiting for {minimum}%",
+            flush=True,
+        )
+        time.sleep(5)
+
+
+def enforce_memory_limits(
+    snapshot: dict[str, int | None],
+    common: dict[str, Any],
+    campaign_swap_start: int | None,
+) -> None:
+    free_percent = snapshot["system_memory_free_percent"]
+    abort_below = int(common.get("abort_memory_free_percent", 0))
+    if free_percent is not None and free_percent < abort_below:
+        raise RuntimeError(
+            f"RAM safety stop: only {free_percent}% memory free (floor {abort_below}%)"
+        )
+    current_swap = snapshot["system_swap_used_bytes"]
+    max_growth = float(common.get("max_swap_growth_gib", 0)) * 1024**3
+    if (
+        campaign_swap_start is not None
+        and current_swap is not None
+        and max_growth
+        and current_swap - campaign_swap_start > max_growth
+    ):
+        growth = (current_swap - campaign_swap_start) / 1024**3
+        raise RuntimeError(
+            f"RAM safety stop: swap grew {growth:.2f} GiB "
+            f"(limit {max_growth / 1024**3:.2f} GiB)"
+        )
 
 
 def run_one(
@@ -421,6 +543,7 @@ def run_one(
     max_tokens: int,
     common: dict[str, Any],
     server_pid: int,
+    campaign_swap_start: int | None,
 ) -> tuple[dict[str, Any], int]:
     memory_before = memory_snapshot(server_pid)
     result = stream_chat(
@@ -430,6 +553,7 @@ def run_one(
     )
     time.sleep(0.2)
     memory_after = memory_snapshot(server_pid)
+    enforce_memory_limits(memory_after, common, campaign_swap_start)
     with log_path.open("rb") as log:
         log.seek(log_offset)
         chunk = log.read()
@@ -441,6 +565,12 @@ def run_one(
             "server_rss_after_bytes": memory_after["server_rss_bytes"],
             "system_swap_before_bytes": memory_before["system_swap_used_bytes"],
             "system_swap_after_bytes": memory_after["system_swap_used_bytes"],
+            "system_memory_free_before_percent": memory_before[
+                "system_memory_free_percent"
+            ],
+            "system_memory_free_after_percent": memory_after[
+                "system_memory_free_percent"
+            ],
         }
     )
     if (
@@ -630,8 +760,8 @@ def write_reports(
     lines = [
         "# Benchmark report",
         "",
-        "| Variant | Spec | Mean decode tok/s | Mean TTFT | Mean acceptance |",
-        "|---|---:|---:|---:|---:|",
+        "| Variant | Spec | Mean decode tok/s | Median | Std dev | Mean TTFT | Spec efficiency | Min free RAM |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     means: dict[str, float] = {}
     for name, group in by_variant.items():
@@ -645,10 +775,30 @@ def write_reports(
             if row.get("spec_acceptance_percent") is not None
         ]
         means[name] = statistics.fmean(tps_values)
-        accept = f"{statistics.fmean(accept_values):.1f}%" if accept_values else "n/a"
+        if accept_values:
+            efficiency = f"{statistics.fmean(accept_values):.1f}% acceptance"
+        else:
+            verify = [row.get("spec_verify_count") for row in group]
+            if all(value is not None for value in verify):
+                tokens = sum(int(row["completion_tokens"]) for row in group)
+                passes = sum(int(value) for value in verify)
+                efficiency = (
+                    f"{100 * (1 - passes / tokens):.1f}% fewer target passes; "
+                    f"{tokens / passes:.2f} tok/verify"
+                )
+            else:
+                efficiency = "n/a"
+        free_values = [
+            row["system_memory_free_after_percent"]
+            for row in group
+            if row.get("system_memory_free_after_percent") is not None
+        ]
+        minimum_free = f"{min(free_values)}%" if free_values else "n/a"
         lines.append(
             f"| {name} | {variant_defs[name]['speculative']} | "
-            f"{means[name]:.2f} | {statistics.fmean(ttft_values):.3f}s | {accept} |"
+            f"{means[name]:.2f} | {statistics.median(tps_values):.2f} | "
+            f"{statistics.stdev(tps_values):.2f} | "
+            f"{statistics.fmean(ttft_values):.3f}s | {efficiency} | {minimum_free} |"
         )
     lines.extend(
         [
@@ -669,25 +819,64 @@ def write_reports(
     lines.extend(
         [
             "",
-            "## Per-case results",
+            "## Per-case means",
             "",
-            "| Prompt | Output | Variant | Decode tok/s | TTFT | Acceptance | Swap delta |",
+            "| Prompt | Output | Variant | Decode tok/s | Std dev | TTFT | Spec efficiency |",
             "|---|---:|---|---:|---:|---:|---:|",
         ]
     )
+    cases: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
     for row in rows:
-        acceptance = (
-            f"{row['spec_acceptance_percent']:.1f}%"
+        key = (row["prompt_id"], row["target_output_tokens"], row["variant"])
+        cases.setdefault(key, []).append(row)
+    for (prompt_id, target_tokens, name), group in cases.items():
+        tps = [row["decode_tps"] for row in group]
+        acceptance_values = [
+            row["spec_acceptance_percent"]
+            for row in group
             if row.get("spec_acceptance_percent") is not None
-            else "n/a"
-        )
-        swap_delta = row.get("system_swap_delta_bytes")
-        swap_text = f"{swap_delta / 1024**2:+.0f} MiB" if swap_delta is not None else "n/a"
+        ]
+        if acceptance_values:
+            efficiency = f"{statistics.fmean(acceptance_values):.1f}% acceptance"
+        elif all(row.get("spec_verify_count") is not None for row in group):
+            tokens = sum(int(row["completion_tokens"]) for row in group)
+            passes = sum(int(row["spec_verify_count"]) for row in group)
+            efficiency = f"{100 * (1 - passes / tokens):.1f}% fewer target passes"
+        else:
+            efficiency = "n/a"
         lines.append(
-            f"| {row['prompt_id']} | {row['target_output_tokens']} | "
-            f"{row['variant']} | {row['decode_tps']:.2f} | "
-            f"{row['ttft_seconds']:.3f}s | {acceptance} | {swap_text} |"
+            f"| {prompt_id} | {target_tokens} | {name} | "
+            f"{statistics.fmean(tps):.2f} | {statistics.stdev(tps):.2f} | "
+            f"{statistics.fmean(row['ttft_seconds'] for row in group):.3f}s | "
+            f"{efficiency} |"
         )
+    initial = json.loads((run_dir / "system.json").read_text())
+    swap_start = initial.get("system_swap_used_bytes")
+    swap_values = [
+        row["system_swap_after_bytes"]
+        for row in rows
+        if row.get("system_swap_after_bytes") is not None
+    ]
+    free_values = [
+        row["system_memory_free_after_percent"]
+        for row in rows
+        if row.get("system_memory_free_after_percent") is not None
+    ]
+    lines.extend(["", "## Memory safety", ""])
+    if free_values:
+        lines.append(f"- Minimum measured system memory free: {min(free_values)}%.")
+    if swap_start is not None and swap_values:
+        growth_mib = (max(swap_values) - swap_start) / 1024**2
+        lines.append(f"- Maximum campaign swap growth: {growth_mib:+.0f} MiB.")
+    positive_request_swap = [
+        row["system_swap_delta_bytes"]
+        for row in rows
+        if row.get("system_swap_delta_bytes", 0) > 0
+    ]
+    lines.append(
+        "- Requests with positive before/after swap growth: "
+        f"{len(positive_request_swap)} of {len(rows)}."
+    )
     lines.extend(["", "## Parity", ""])
     if parity:
         lines.extend(f"- {item}" for item in parity)
@@ -741,14 +930,21 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
         json.dumps(system_manifest(), indent=2) + "\n"
     )
     rows: list[dict[str, Any]] = []
+    campaign_memory = wait_for_memory(common, "campaign start")
+    campaign_swap_start = campaign_memory["system_swap_used_bytes"]
     print(f"run: {run_dir}", flush=True)
     for index, variant in enumerate(variants):
+        wait_for_memory(common, variant["id"])
         print(f"\n[{index + 1}/{len(variants)}] {variant['id']}", flush=True)
         with server(effective, variant, run_dir) as (base_url, log_path, server_pid):
             offset = log_path.stat().st_size
             warmup_tokens = int(common["warmup_tokens"])
             if warmup_tokens:
-                print(f"  warmup: {warmup_tokens} tokens", flush=True)
+                print(
+                    f"  untimed kernel warmup: {warmup_tokens} tokens "
+                    "(fresh request; request/KV caches remain disabled)",
+                    flush=True,
+                )
                 _, offset = run_one(
                     base_url,
                     log_path,
@@ -758,6 +954,7 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
                     warmup_tokens,
                     common,
                     server_pid,
+                    campaign_swap_start,
                 )
             for prompt in prompts:
                 for target in output_tokens:
@@ -775,6 +972,7 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
                             target,
                             common,
                             server_pid,
+                            campaign_swap_start,
                         )
                         result.update(
                             {

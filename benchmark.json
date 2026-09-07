@@ -21,9 +21,13 @@
     "seed": null,
     "enable_thinking": false,
     "output_tokens": [128, 512],
-    "repetitions": 1,
-    "warmup_tokens": 16,
-    "cooldown_seconds": 5,
+    "repetitions": 3,
+    "warmup_tokens": 512,
+    "cooldown_seconds": 15,
+    "min_memory_free_percent": 60,
+    "abort_memory_free_percent": 12,
+    "max_swap_growth_gib": 4.0,
+    "memory_recovery_timeout_seconds": 600,
     "server_start_timeout_seconds": 900,
     "request_timeout_seconds": 1200,
     "strict_exact_output": true
@@ -75,6 +79,7 @@
       "engine": "omlx",
       "model": "Qwen3.6-27B-OptiQ-4bit",
       "speculative": "mtp",
+      "mtp_draft_tokens": 2,
       "baseline": "omlx-optiq-base"
     }
   ]

@@ -44,9 +44,32 @@ class MetricsTests(unittest.TestCase):
             (source / "config.json").write_text(
                 json.dumps({"text_config": {"model_type": "qwen3_5_text"}})
             )
-            header = json.dumps({"mtp.fc.weight": {"dtype": "F32", "shape": [0], "data_offsets": [0, 0]}}).encode()
+            tensors = {
+                f"mtp.{name}": {
+                    "dtype": "BF16",
+                    "shape": [1],
+                    "data_offsets": [index * 2, index * 2 + 2],
+                }
+                for index, name in enumerate(
+                    [
+                        "layers.0.input_layernorm.weight",
+                        "layers.0.post_attention_layernorm.weight",
+                        "layers.0.self_attn.q_norm.weight",
+                        "layers.0.self_attn.k_norm.weight",
+                        "pre_fc_norm_hidden.weight",
+                        "pre_fc_norm_embedding.weight",
+                        "norm.weight",
+                    ]
+                )
+            }
+            tensors["mtp.fc.weight"] = {
+                "dtype": "F32",
+                "shape": [0],
+                "data_offsets": [14, 14],
+            }
+            header = json.dumps(tensors).encode()
             (source / "mtp.safetensors").write_bytes(
-                struct.pack("<Q", len(header)) + header
+                struct.pack("<Q", len(header)) + header + struct.pack("<7H", *([0] * 7))
             )
             (source / "model.safetensors.index.json").write_text(
                 json.dumps({"weight_map": {"model.weight": "model.safetensors"}})
@@ -65,6 +88,14 @@ class MetricsTests(unittest.TestCase):
             )
             self.assertNotIn("mtp_num_hidden_layers", original["text_config"])
             self.assertTrue((view / "model" / "mtp.safetensors").is_file())
+            self.assertNotEqual(
+                (view / "model" / "mtp.safetensors").stat().st_ino,
+                (source / "mtp.safetensors").stat().st_ino,
+            )
+            with (view / "model" / "mtp.safetensors").open("rb") as handle:
+                size = struct.unpack("<Q", handle.read(8))[0]
+                handle.seek(8 + size)
+                self.assertEqual(struct.unpack("<7H", handle.read(14)), (0x3F80,) * 7)
             index = json.loads(
                 (view / "model" / "model.safetensors.index.json").read_text()
             )

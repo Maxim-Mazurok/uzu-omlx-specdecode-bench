@@ -23,13 +23,17 @@ MXFP4 does not ship `mtp.*` weights, so it cannot use native MTP. The installed
 OptiQ checkpoint does ship `mtp.safetensors`; no separate drafter is needed for
 that pair. Its converted weight index omits the separate sidecar, so the runner
 creates a per-run hardlink view and maps the MTP tensors and their OptiQ
-quantization metadata into the view's config/index. Hardlinks avoid an extra
-19 GB copy while keeping OptiQ's vision-sidecar safety check satisfied. The
-installed checkpoint is never modified.
+quantization metadata into the view's config/index. The downloaded sidecar also
+retains raw Qwen RMSNorm weights while the backbone is already in MLX
+convention. oMLX's indexed-shard loader repairs only four of seven norms on
+this path, which caused 0% draft acceptance. The runner copies only the 300 MB
+MTP sidecar into the temporary view, shifts all seven norms to MLX convention,
+and leaves the downloaded checkpoint untouched. All 19 GB target shards remain
+hardlinked.
 
-The native OptiQ MTP path remains in the matrix even if its acceptance is poor;
-the DFlash path provides a separate speculative comparison for the same OptiQ
-target instead of assuming that bundled MTP must be faster.
+Native MTP uses depth 2, the model author's documented empirical sweet spot.
+The DFlash path provides an independent speculative comparison for the same
+OptiQ target.
 
 ## Fairness controls
 
@@ -45,8 +49,10 @@ target instead of assuming that bundled MTP must be faster.
   discovery disabled; DFlash's private RAM and SSD prefix caches disabled.
 - Every output length is a fresh request. Longer output therefore grows only
   that request's KV context instead of inheriting prior generated context.
-- Warmups are excluded. Raw server logs, full responses, hashes, timings, and
-  effective settings are retained under `results/`.
+- A fresh 512-token Metal/kernel warmup is excluded for each loaded variant.
+  Request/KV caches remain disabled during warmup and measurement. Raw server
+  logs, full responses, hashes, timings, and effective settings are retained
+  under `results/`.
 - Per-request server RSS and system swap deltas are captured, making memory
   pressure visible instead of silently counting swap-throttled runs as normal.
 
@@ -81,7 +87,8 @@ Run a functional six-variant smoke test:
 python3 specbench.py run --smoke
 ```
 
-Run the default benchmark (three prompts, 128 and 512 output tokens):
+Run the default benchmark (three prompts, 128 and 512 output tokens, three
+repetitions per case):
 
 ```sh
 python3 specbench.py run

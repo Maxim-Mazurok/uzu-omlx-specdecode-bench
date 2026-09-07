@@ -1,4 +1,8 @@
-# Functional validation results
+# Superseded functional validation results
+
+These cold-start exploratory checks are superseded by
+[`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md). They remain here as the failure
+record that led to the native-MTP norm repair and full warm-run methodology.
 
 These are **exploratory functional checks, not a publishable benchmark**. The
 matrix was stopped before completion to avoid further memory pressure. Every
@@ -45,4 +49,3 @@ Uzu 0.5.26 exposes no way to disable its bundled speculator. Its model resolver
 also treats the sidecar as a required checkpoint artifact, so removing it makes
 the target unavailable before session creation. The harness reports Uzu's
 verification-pass efficiency but does not invent a speculation-off speedup.
-
