@@ -55,6 +55,9 @@ OptiQ target.
   under `results/`.
 - Per-request server RSS and system swap deltas are captured, making memory
   pressure visible instead of silently counting swap-throttled runs as normal.
+- A live watchdog checks memory during long prefills and terminates only the
+  active benchmark server if free RAM or campaign swap growth crosses the
+  configured safety limit.
 
 Throughput is measured from the first to last streamed content event as
 `(completion_tokens - 1) / seconds`. End-to-end throughput and TTFT are also
@@ -103,6 +106,20 @@ python3 specbench.py run \
   --output-tokens 128,512,1024 \
   --repetitions 3
 ```
+
+Run the two fastest configurations with exact 10k- and 50k-token prompts:
+
+```sh
+python3 specbench.py run \
+  --prompts long_context_prompts.jsonl \
+  --variants uzu-m-spec,omlx-optiq-dflash \
+  --output-tokens 512 \
+  --repetitions 3
+```
+
+The long-context prompt definitions are compact repeat specifications expanded
+in memory by the runner. Their expected token counts are checked against each
+server response before a row is accepted.
 
 Each timestamped run contains `REPORT.md`, CSV/JSONL results, an effective
 configuration, system manifest, exact server commands, and per-variant logs.

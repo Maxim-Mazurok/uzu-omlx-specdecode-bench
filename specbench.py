@@ -17,6 +17,7 @@ import statistics
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -60,6 +61,18 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def load_prompts(path: Path) -> list[dict[str, Any]]:
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    for row in rows:
+        synthetic = row.pop("synthetic_context", None)
+        if synthetic:
+            content = (
+                synthetic["unit"] * int(synthetic["repeats"])
+                + synthetic.get("pad_unit", "") * int(synthetic.get("pad_repeats", 0))
+                + synthetic["suffix"]
+            )
+            row["messages"] = [
+                {"role": "system", "content": synthetic["system"]},
+                {"role": "user", "content": content},
+            ]
     ids = [row["id"] for row in rows]
     if len(ids) != len(set(ids)):
         raise ValueError("prompt IDs must be unique")
@@ -546,11 +559,42 @@ def run_one(
     campaign_swap_start: int | None,
 ) -> tuple[dict[str, Any], int]:
     memory_before = memory_snapshot(server_pid)
-    result = stream_chat(
-        base_url,
-        chat_body(variant, prompt, max_tokens, common),
-        float(common["request_timeout_seconds"]),
-    )
+    watch_stop = threading.Event()
+    memory_breach: list[RuntimeError] = []
+
+    def watch_memory() -> None:
+        interval = float(common.get("memory_watch_interval_seconds", 2))
+        while not watch_stop.wait(interval):
+            snapshot = memory_snapshot(server_pid)
+            try:
+                enforce_memory_limits(snapshot, common, campaign_swap_start)
+            except RuntimeError as exc:
+                memory_breach.append(exc)
+                try:
+                    os.killpg(server_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                return
+
+    watcher = threading.Thread(target=watch_memory, daemon=True)
+    watcher.start()
+    try:
+        result = stream_chat(
+            base_url,
+            chat_body(variant, prompt, max_tokens, common),
+            float(common["request_timeout_seconds"]),
+        )
+    except Exception:
+        watch_stop.set()
+        watcher.join(timeout=5)
+        if memory_breach:
+            raise memory_breach[0]
+        raise
+    finally:
+        watch_stop.set()
+    watcher.join(timeout=5)
+    if memory_breach:
+        raise memory_breach[0]
     time.sleep(0.2)
     memory_after = memory_snapshot(server_pid)
     enforce_memory_limits(memory_after, common, campaign_swap_start)
@@ -985,6 +1029,15 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
                                 "repetition": repetition,
                             }
                         )
+                        expected_prompt_tokens = prompt.get("expected_prompt_tokens")
+                        if (
+                            expected_prompt_tokens is not None
+                            and result["prompt_tokens"] != int(expected_prompt_tokens)
+                        ):
+                            raise RuntimeError(
+                                f"{prompt['id']} produced {result['prompt_tokens']} prompt "
+                                f"tokens; expected {expected_prompt_tokens}"
+                            )
                         rows.append(result)
                         (run_dir / "results.partial.jsonl").write_text(
                             "".join(

@@ -14,6 +14,29 @@ SPEC.loader.exec_module(specbench)
 
 
 class MetricsTests(unittest.TestCase):
+    def test_synthetic_prompt_expansion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "prompts.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "id": "synthetic",
+                        "expected_prompt_tokens": 10,
+                        "synthetic_context": {
+                            "system": "system",
+                            "unit": "abc",
+                            "repeats": 2,
+                            "pad_unit": "x",
+                            "pad_repeats": 1,
+                            "suffix": "end",
+                        },
+                    }
+                )
+            )
+            row = specbench.load_prompts(path)[0]
+            self.assertEqual(row["messages"][1]["content"], "abcabcxend")
+            self.assertNotIn("synthetic_context", row)
+
     def test_mtp_log(self):
         row = specbench.parse_spec_log(
             "MTP[abc] finish=length tokens=64 cycles=30 tok/cycle=2.13 "
@@ -35,6 +58,28 @@ class MetricsTests(unittest.TestCase):
         config = {"variants": [{"id": "off", "enabled": False}]}
         with self.assertRaisesRegex(ValueError, "disabled variants"):
             specbench.selected_variants(config, "off")
+
+    def test_memory_limits_reject_low_free_ram(self):
+        with self.assertRaisesRegex(RuntimeError, "only 5% memory free"):
+            specbench.enforce_memory_limits(
+                {
+                    "system_memory_free_percent": 5,
+                    "system_swap_used_bytes": 0,
+                },
+                {"abort_memory_free_percent": 12, "max_swap_growth_gib": 4},
+                0,
+            )
+
+    def test_memory_limits_reject_swap_growth(self):
+        with self.assertRaisesRegex(RuntimeError, "swap grew"):
+            specbench.enforce_memory_limits(
+                {
+                    "system_memory_free_percent": 50,
+                    "system_swap_used_bytes": 5 * 1024**3,
+                },
+                {"abort_memory_free_percent": 12, "max_swap_growth_gib": 4},
+                0,
+            )
 
     def test_mtp_view_patches_config_without_touching_source(self):
         with tempfile.TemporaryDirectory() as temporary:

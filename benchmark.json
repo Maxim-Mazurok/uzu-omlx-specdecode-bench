@@ -28,6 +28,7 @@
     "abort_memory_free_percent": 12,
     "max_swap_growth_gib": 4.0,
     "memory_recovery_timeout_seconds": 600,
+    "memory_watch_interval_seconds": 2,
     "server_start_timeout_seconds": 900,
     "request_timeout_seconds": 1200,
     "strict_exact_output": true
