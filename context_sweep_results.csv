@@ -1,0 +1,11 @@
+engine,context_tokens,output_tokens,decode_tps,ttft_seconds,spec_efficiency_percent,status
+Uzu Mirai-M,1000,512,20.078686,5.259319,76.367,clean
+Uzu Mirai-M,5000,512,16.632188,25.441674,73.047,clean
+Uzu Mirai-M,10000,512,15.995803,51.739371,72.461,clean
+Uzu Mirai-M,20000,512,15.737048,110.387608,73.047,clean
+Uzu Mirai-M,30000,512,13.297283,177.907086,70.312,clean
+Uzu Mirai-M,40000,512,13.565935,254.542249,71.484,clean
+oMLX OptiQ+DFlash,1000,512,14.789485,4.857167,63.300,clean
+oMLX OptiQ+DFlash,5000,512,15.269668,24.021204,64.500,clean
+oMLX OptiQ+DFlash,10000,512,14.707535,73.424809,64.600,clean
+oMLX OptiQ+DFlash,20000,512,13.100000,369.796000,65.000,ram_safety_boundary_engine_log

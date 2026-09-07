@@ -14,6 +14,9 @@ SPEC.loader.exec_module(specbench)
 
 
 class MetricsTests(unittest.TestCase):
+    def test_single_observation_stdev_is_zero(self):
+        self.assertEqual(specbench.sample_stdev([15.0]), 0.0)
+
     def test_synthetic_prompt_expansion(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "prompts.jsonl"

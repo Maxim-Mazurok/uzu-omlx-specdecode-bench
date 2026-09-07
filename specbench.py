@@ -52,6 +52,11 @@ def expand(value: str) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
 
 
+def sample_stdev(values: list[float]) -> float:
+    """Return sample standard deviation, or zero for a single observation."""
+    return statistics.stdev(values) if len(values) > 1 else 0.0
+
+
 def load_config(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text())
     if data.get("schema_version") != 1:
@@ -841,7 +846,7 @@ def write_reports(
         lines.append(
             f"| {name} | {variant_defs[name]['speculative']} | "
             f"{means[name]:.2f} | {statistics.median(tps_values):.2f} | "
-            f"{statistics.stdev(tps_values):.2f} | "
+            f"{sample_stdev(tps_values):.2f} | "
             f"{statistics.fmean(ttft_values):.3f}s | {efficiency} | {minimum_free} |"
         )
     lines.extend(
@@ -890,7 +895,8 @@ def write_reports(
             efficiency = "n/a"
         lines.append(
             f"| {prompt_id} | {target_tokens} | {name} | "
-            f"{statistics.fmean(tps):.2f} | {statistics.stdev(tps):.2f} | "
+            f"{statistics.fmean(tps):.2f} | "
+            f"{sample_stdev(tps):.2f} | "
             f"{statistics.fmean(row['ttft_seconds'] for row in group):.3f}s | "
             f"{efficiency} |"
         )

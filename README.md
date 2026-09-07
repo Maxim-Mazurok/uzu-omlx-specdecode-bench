@@ -121,6 +121,20 @@ The long-context prompt definitions are compact repeat specifications expanded
 in memory by the runner. Their expected token counts are checked against each
 server response before a row is accepted.
 
+Map decode speed over exact context checkpoints with fixed 512-token outputs:
+
+```sh
+python3 specbench.py run \
+  --prompts context_sweep_prompts.jsonl \
+  --prompt-ids context-1k,context-5k,context-10k,context-20k,context-30k,context-40k \
+  --variants uzu-m-spec,omlx-optiq-dflash \
+  --output-tokens 512 \
+  --repetitions 1
+```
+
+See [`CONTEXT_SWEEP_RESULTS.md`](CONTEXT_SWEEP_RESULTS.md) for the 32 GB Mac
+results and practical RAM limits.
+
 Each timestamped run contains `REPORT.md`, CSV/JSONL results, an effective
 configuration, system manifest, exact server commands, and per-variant logs.
 
