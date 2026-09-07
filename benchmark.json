@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "binaries": {
+    "uzu": "~/.local/bin/uzu",
+    "omlx": "~/.local/bin/omlx",
+    "hf": "/opt/homebrew/bin/hf"
+  },
+  "paths": {
+    "uzu_model": "~/.cache/mirai/models/mirai/alibaba-qwen3.6-27b-mirai-mirai-m-4/0.15.0",
+    "omlx_model_dir": "~/.omlx/models",
+    "dflash_draft": "~/.omlx/draft-models/Qwen3.6-27B-DFlash"
+  },
+  "draft_repo": "z-lab/Qwen3.6-27B-DFlash",
+  "common": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 1,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 0.0,
+    "min_p": 0.0,
+    "seed": null,
+    "enable_thinking": false,
+    "output_tokens": [128, 512],
+    "repetitions": 1,
+    "warmup_tokens": 16,
+    "cooldown_seconds": 5,
+    "server_start_timeout_seconds": 900,
+    "request_timeout_seconds": 1200,
+    "strict_exact_output": true
+  },
+  "variants": [
+    {
+      "id": "uzu-m-base",
+      "engine": "uzu",
+      "model": "Qwen3.6-27B-Mirai-M-4",
+      "speculative": "off",
+      "enabled": false,
+      "unavailable_reason": "Uzu 0.5.26 treats the bundled speculator as a required checkpoint file and exposes no no-speculation switch"
+    },
+    {
+      "id": "uzu-m-spec",
+      "engine": "uzu",
+      "model": "Qwen3.6-27B-Mirai-M-4",
+      "speculative": "mirai-m"
+    },
+    {
+      "id": "omlx-mxfp4-base",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-MXFP4",
+      "speculative": "off"
+    },
+    {
+      "id": "omlx-mxfp4-dflash",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-MXFP4",
+      "speculative": "dflash",
+      "baseline": "omlx-mxfp4-base"
+    },
+    {
+      "id": "omlx-optiq-base",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-OptiQ-4bit",
+      "speculative": "off"
+    },
+    {
+      "id": "omlx-optiq-dflash",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-OptiQ-4bit",
+      "speculative": "dflash",
+      "draft_quant_bits": 4,
+      "baseline": "omlx-optiq-base"
+    },
+    {
+      "id": "omlx-optiq-mtp",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-OptiQ-4bit",
+      "speculative": "mtp",
+      "baseline": "omlx-optiq-base"
+    }
+  ]
+}

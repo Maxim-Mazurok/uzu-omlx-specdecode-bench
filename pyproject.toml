@@ -1,0 +1,19 @@
+[project]
+name = "uzu-omlx-specdecode-bench"
+version = "0.1.0"
+description = "A thin, cache-controlled Uzu versus oMLX speculative-decoding benchmark"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.scripts]
+specbench = "specbench:main"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["specbench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
