@@ -8,9 +8,11 @@
   "paths": {
     "uzu_model": "~/.cache/mirai/models/mirai/alibaba-qwen3.6-27b-mirai-mirai-m-4/0.15.0",
     "omlx_model_dir": "~/.omlx/models",
-    "dflash_draft": "~/.omlx/draft-models/Qwen3.6-27B-DFlash"
+    "dflash_draft": "~/.omlx/draft-models/Qwen3.6-27B-DFlash",
+    "vlm_mtp_draft": "~/.omlx/models/mlx-community/Qwen3.6-27B-MTP-4bit"
   },
   "draft_repo": "z-lab/Qwen3.6-27B-DFlash",
+  "vlm_mtp_draft_repo": "mlx-community/Qwen3.6-27B-MTP-4bit",
   "common": {
     "temperature": 0.0,
     "top_p": 1.0,
@@ -70,6 +72,15 @@
       "baseline": "omlx-mxfp4-base"
     },
     {
+      "id": "omlx-mxfp4-vlm-mtp",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-MXFP4",
+      "speculative": "vlm-mtp",
+      "vlm_mtp_draft_block_size": 2,
+      "baseline": "omlx-mxfp4-base",
+      "default_run": false
+    },
+    {
       "id": "omlx-optiq-base",
       "engine": "omlx",
       "model": "Qwen3.6-27B-OptiQ-4bit",
@@ -90,6 +101,15 @@
       "speculative": "mtp",
       "mtp_draft_tokens": 2,
       "baseline": "omlx-optiq-base"
+    },
+    {
+      "id": "omlx-optiq-vlm-mtp",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-OptiQ-4bit",
+      "speculative": "vlm-mtp",
+      "vlm_mtp_draft_block_size": 2,
+      "baseline": "omlx-optiq-base",
+      "default_run": false
     }
   ]
 }

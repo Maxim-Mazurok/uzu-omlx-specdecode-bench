@@ -118,7 +118,9 @@ def wait_ready(base_url: str, proc: subprocess.Popen[Any], timeout: float) -> No
     raise TimeoutError(f"server did not become ready: {last_error}")
 
 
-def omlx_settings(variant: dict[str, Any], draft: Path) -> dict[str, Any]:
+def omlx_settings(
+    variant: dict[str, Any], dflash_draft: Path, vlm_mtp_draft: Path
+) -> dict[str, Any]:
     spec = variant["speculative"]
     settings: dict[str, Any] = {
         "max_tokens": 32768,
@@ -133,7 +135,7 @@ def omlx_settings(variant: dict[str, Any], draft: Path) -> dict[str, Any]:
         "dflash_in_memory_cache": False,
         "dflash_ssd_cache": False,
         "mtp_enabled": spec == "mtp",
-        "vlm_mtp_enabled": False,
+        "vlm_mtp_enabled": spec == "vlm-mtp",
         "is_pinned": False,
         "is_default": False,
     }
@@ -141,7 +143,7 @@ def omlx_settings(variant: dict[str, Any], draft: Path) -> dict[str, Any]:
         draft_bits = variant.get("draft_quant_bits")
         settings.update(
             {
-                "dflash_draft_model": str(draft),
+                "dflash_draft_model": str(dflash_draft),
                 "dflash_draft_quant_enabled": draft_bits is not None,
                 "dflash_draft_quant_weight_bits": int(draft_bits or 4),
                 "dflash_draft_quant_activation_bits": 16,
@@ -152,6 +154,15 @@ def omlx_settings(variant: dict[str, Any], draft: Path) -> dict[str, Any]:
         )
     if spec == "mtp":
         settings["mtp_num_draft_tokens"] = int(variant.get("mtp_draft_tokens", 2))
+    if spec == "vlm-mtp":
+        settings.update(
+            {
+                "vlm_mtp_draft_model": str(vlm_mtp_draft),
+                "vlm_mtp_draft_block_size": int(
+                    variant.get("vlm_mtp_draft_block_size", 2)
+                ),
+            }
+        )
     return {"version": 1, "models": {variant["model"]: settings}}
 
 
@@ -304,7 +315,14 @@ def server(
             expand(paths["omlx_model_dir"]), variant, variant_dir / "omlx-models"
         )
         (base_path / "model_settings.json").write_text(
-            json.dumps(omlx_settings(variant, expand(paths["dflash_draft"])), indent=2)
+            json.dumps(
+                omlx_settings(
+                    variant,
+                    expand(paths["dflash_draft"]),
+                    expand(paths.get("vlm_mtp_draft", paths["dflash_draft"])),
+                ),
+                indent=2,
+            )
             + "\n"
         )
         cmd = [
@@ -654,7 +672,11 @@ def selected_variants(
 ) -> list[dict[str, Any]]:
     variants = config["variants"]
     if not names:
-        return [row for row in variants if row.get("enabled", True)]
+        return [
+            row
+            for row in variants
+            if row.get("enabled", True) and row.get("default_run", True)
+        ]
     wanted = names.split(",")
     by_id = {row["id"]: row for row in variants}
     missing = [name for name in wanted if name not in by_id]
@@ -731,6 +753,14 @@ def doctor(config: dict[str, Any]) -> int:
     checks.append(
         ("DFlash draft", (draft / "model.safetensors").is_file(), str(draft))
     )
+    vlm_mtp_draft = expand(paths["vlm_mtp_draft"])
+    checks.append(
+        (
+            "Qwen3.6 VLM MTP draft",
+            (vlm_mtp_draft / "model.safetensors").is_file(),
+            str(vlm_mtp_draft),
+        )
+    )
     for name, ok, detail in checks:
         print(f"{'OK  ' if ok else 'MISS'} {name}: {detail}")
     print("\nParity policy: temperature/top_p/top_k shared; neutral penalties; seed omitted")
@@ -741,13 +771,13 @@ def doctor(config: dict[str, Any]) -> int:
     return 0 if all(ok for _, ok, _ in checks) else 1
 
 
-def download_draft(config: dict[str, Any]) -> int:
-    target = expand(config["paths"]["dflash_draft"])
+def download_draft(config: dict[str, Any], path_key: str, repo_key: str) -> int:
+    target = expand(config["paths"][path_key])
     target.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         str(expand(config["binaries"]["hf"])),
         "download",
-        config["draft_repo"],
+        config[repo_key],
         "--local-dir",
         str(target),
     ]
@@ -1072,6 +1102,8 @@ def plan(config: dict[str, Any]) -> int:
     for variant in config["variants"]:
         baseline = f"; baseline={variant['baseline']}" if variant.get("baseline") else ""
         status = "" if variant.get("enabled", True) else "; disabled"
+        if not variant.get("default_run", True):
+            status += "; opt-in"
         print(
             f"  {variant['id']}: {variant['engine']} / {variant['model']} / "
             f"{variant['speculative']}{baseline}{status}"
@@ -1096,6 +1128,10 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "download-draft", help="download the configured oMLX DFlash drafter"
     )
+    sub.add_parser(
+        "download-vlm-mtp",
+        help="download the configured Qwen3.6 external VLM MTP drafter",
+    )
     run = sub.add_parser("run", help="run the benchmark matrix")
     run.add_argument("--prompts", default=str(ROOT / "prompts.jsonl"))
     run.add_argument("--output-dir", default=str(ROOT / "results"))
@@ -1117,7 +1153,9 @@ def main() -> int:
     if args.command == "plan":
         return plan(config)
     if args.command == "download-draft":
-        return download_draft(config)
+        return download_draft(config, "dflash_draft", "draft_repo")
+    if args.command == "download-vlm-mtp":
+        return download_draft(config, "vlm_mtp_draft", "vlm_mtp_draft_repo")
     if args.command == "run":
         return run_benchmark(args, config)
     return 2

@@ -10,8 +10,8 @@ The default matrix is:
 | Target checkpoint | Baseline | Speculative path |
 |---|---|---|
 | Uzu Mirai-M-4 | unavailable in public CLI | bundled Mirai-M speculator |
-| oMLX MXFP4 | target only | DFlash in BF16 and 4-bit draft modes |
-| oMLX OptiQ-4bit | target only | DFlash and checkpoint's native Lightning MTP |
+| oMLX MXFP4 | target only | DFlash; external VLM MTP (opt-in, pending) |
+| oMLX OptiQ-4bit | target only | DFlash; native Lightning MTP; external VLM MTP (opt-in, pending) |
 
 Uzu 0.5.26 treats the bundled speculator as a required checkpoint artifact and
 has no public no-speculation switch. The harness therefore runs Uzu Mirai-M and
@@ -34,6 +34,12 @@ hardlinked.
 Native MTP uses depth 2, the model author's documented empirical sweet spot.
 The DFlash path provides an independent speculative comparison for the same
 OptiQ target.
+
+External VLM MTP is wired separately for both oMLX targets using the dedicated
+`mlx-community/Qwen3.6-27B-MTP-4bit` assistant checkpoint and block size 2.
+Those variants are opt-in: they are excluded from the default matrix and the
+existing continuous campaign until the functional, parity, memory, and speed
+checks in [`TODO.md`](TODO.md) are complete.
 
 ## Fairness controls
 
@@ -84,6 +90,14 @@ Download the external DFlash drafter (3.5 GB):
 python3 specbench.py download-draft
 ```
 
+Later, download the external Qwen3.6 VLM MTP drafter (about 258 MB):
+
+```sh
+python3 specbench.py download-vlm-mtp
+```
+
+The VLM MTP download is not required for the default matrix.
+
 Run a functional six-variant smoke test:
 
 ```sh
@@ -104,6 +118,16 @@ python3 specbench.py run \
   --variants omlx-optiq-base,omlx-optiq-mtp \
   --prompt-ids code-stream \
   --output-tokens 128,512,1024 \
+  --repetitions 3
+```
+
+After completing the VLM MTP setup TODO, select its opt-in variants explicitly:
+
+```sh
+python3 specbench.py run \
+  --variants omlx-mxfp4-base,omlx-mxfp4-vlm-mtp,omlx-optiq-base,omlx-optiq-vlm-mtp \
+  --prompt-ids code-stream \
+  --output-tokens 128,512 \
   --repetitions 3
 ```
 

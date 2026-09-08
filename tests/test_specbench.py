@@ -62,6 +62,38 @@ class MetricsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "disabled variants"):
             specbench.selected_variants(config, "off")
 
+    def test_opt_in_variant_is_selectable_but_not_in_default_run(self):
+        config = {
+            "variants": [
+                {"id": "normal"},
+                {"id": "optional", "default_run": False},
+            ]
+        }
+        self.assertEqual(
+            [row["id"] for row in specbench.selected_variants(config, None)],
+            ["normal"],
+        )
+        self.assertEqual(
+            [row["id"] for row in specbench.selected_variants(config, "optional")],
+            ["optional"],
+        )
+
+    def test_vlm_mtp_settings_use_external_drafter_only(self):
+        settings = specbench.omlx_settings(
+            {
+                "model": "target",
+                "speculative": "vlm-mtp",
+                "vlm_mtp_draft_block_size": 2,
+            },
+            Path("/draft/dflash"),
+            Path("/draft/qwen36-mtp"),
+        )["models"]["target"]
+        self.assertTrue(settings["vlm_mtp_enabled"])
+        self.assertEqual(settings["vlm_mtp_draft_model"], "/draft/qwen36-mtp")
+        self.assertEqual(settings["vlm_mtp_draft_block_size"], 2)
+        self.assertFalse(settings["dflash_enabled"])
+        self.assertFalse(settings["mtp_enabled"])
+
     def test_memory_limits_reject_low_free_ram(self):
         with self.assertRaisesRegex(RuntimeError, "only 5% memory free"):
             specbench.enforce_memory_limits(
