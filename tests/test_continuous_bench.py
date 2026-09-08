@@ -24,7 +24,7 @@ class ContinuousBenchTests(unittest.TestCase):
     def test_each_round_rotates_all_variants(self):
         for round_index in range(5):
             scheduled = {
-                continuous.variant_for(round_index, slot)
+                continuous.variant_for(continuous.VARIANTS, round_index, slot)
                 for slot in range(len(continuous.VARIANTS))
             }
             self.assertEqual(scheduled, set(continuous.VARIANTS))
@@ -70,8 +70,8 @@ class ContinuousBenchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             chart = Path(temporary) / "chart.html"
             manifest = {
-                "schema_version": 2,
-                "variants": list(continuous.VARIANTS),
+                "schema_version": 3,
+                "chart_variants": list(continuous.CHART_VARIANTS),
                 "segments": [
                     {
                         "start_attempt": 0,
@@ -81,6 +81,7 @@ class ContinuousBenchTests(unittest.TestCase):
                         "max_context": 50000,
                         "output_tokens": 512,
                         "delay_seconds": 60.0,
+                        "variants": list(continuous.VARIANTS),
                     }
                 ],
             }
@@ -89,18 +90,27 @@ class ContinuousBenchTests(unittest.TestCase):
             self.assertIn("20.00 tok/s", text)
             self.assertIn("RAM stop", text)
             self.assertIn("refresh", text)
+            self.assertIn("oMLX OptiQ + VLM MTP 4-bit", text)
+            self.assertIn("oMLX MXFP4 + VLM MTP 4-bit", text)
 
     def test_changed_range_becomes_new_segment_after_partial_round(self):
         with tempfile.TemporaryDirectory() as temporary:
             campaign = Path(temporary)
             old = {
-                "schema_version": 1,
-                "seed": 20260908,
-                "min_context": 69,
-                "max_context": 50000,
-                "output_tokens": 512,
-                "delay_seconds": 60.0,
-                "variants": list(continuous.VARIANTS),
+                "schema_version": 3,
+                "chart_variants": list(continuous.CHART_VARIANTS),
+                "segments": [
+                    {
+                        "start_attempt": 0,
+                        "start_round": 0,
+                        "seed": 20260908,
+                        "min_context": 69,
+                        "max_context": 50000,
+                        "output_tokens": 512,
+                        "delay_seconds": 60.0,
+                        "variants": list(continuous.VARIANTS),
+                    }
+                ],
             }
             (campaign / "campaign.json").write_text(json.dumps(old))
             events = [
@@ -128,11 +138,11 @@ class ContinuousBenchTests(unittest.TestCase):
             self.assertEqual(manifest["segments"][1]["start_attempt"], 96)
             self.assertEqual(manifest["segments"][1]["start_round"], 32)
             self.assertEqual(
-                continuous.segment_for_round(manifest, 31)[1]["max_context"],
+                continuous.segment_for_attempt(manifest, 95)[1]["max_context"],
                 50000,
             )
             self.assertEqual(
-                continuous.segment_for_round(manifest, 32)[1]["max_context"],
+                continuous.segment_for_attempt(manifest, 96)[1]["max_context"],
                 13000,
             )
 
@@ -141,8 +151,8 @@ class ContinuousBenchTests(unittest.TestCase):
 
     def test_chart_keeps_old_range_when_new_segment_is_narrower(self):
         manifest = {
-            "schema_version": 2,
-            "variants": list(continuous.VARIANTS),
+            "schema_version": 3,
+            "chart_variants": list(continuous.CHART_VARIANTS),
             "segments": [
                 {
                     "start_attempt": 0,
@@ -152,6 +162,7 @@ class ContinuousBenchTests(unittest.TestCase):
                     "max_context": 50000,
                     "output_tokens": 512,
                     "delay_seconds": 0,
+                    "variants": list(continuous.VARIANTS),
                 },
                 {
                     "start_attempt": 3,
@@ -161,6 +172,7 @@ class ContinuousBenchTests(unittest.TestCase):
                     "max_context": 13000,
                     "output_tokens": 512,
                     "delay_seconds": 0,
+                    "variants": list(continuous.VARIANTS),
                 },
             ],
         }
@@ -182,6 +194,73 @@ class ContinuousBenchTests(unittest.TestCase):
             text = chart.read_text()
             self.assertIn("collecting 69–13,000 context", text)
             self.assertIn(">50k</text>", text)
+
+    def test_legacy_roster_switches_immediately_without_rewriting_events(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Path(temporary)
+            old = {
+                "schema_version": 2,
+                "variants": list(continuous.LEGACY_VARIANTS),
+                "segments": [
+                    {
+                        "start_attempt": 0,
+                        "start_round": 0,
+                        "seed": 20260908,
+                        "min_context": 69,
+                        "max_context": 50000,
+                        "output_tokens": 512,
+                        "delay_seconds": 60.0,
+                    },
+                    {
+                        "start_attempt": 96,
+                        "start_round": 32,
+                        "seed": 20260908,
+                        "min_context": 69,
+                        "max_context": 13000,
+                        "output_tokens": 512,
+                        "delay_seconds": 60.0,
+                    },
+                ],
+            }
+            (campaign / "campaign.json").write_text(json.dumps(old))
+            events = [
+                {
+                    "attempt": index,
+                    "round": index // 3,
+                    "variant": continuous.LEGACY_VARIANTS[index % 3],
+                }
+                for index in range(98)
+            ]
+            ledger = "".join(json.dumps(row) + "\n" for row in events)
+            (campaign / "events.jsonl").write_text(ledger)
+            args = argparse.Namespace(
+                campaign_dir=str(campaign),
+                seed=20260908,
+                min_context=69,
+                max_context=13000,
+                output_tokens=512,
+                delay_seconds=60.0,
+            )
+
+            _, loaded, manifest = continuous.prepare_campaign(args)
+
+            self.assertEqual((campaign / "events.jsonl").read_text(), ledger)
+            self.assertEqual(loaded, events)
+            self.assertEqual(manifest["schema_version"], 3)
+            self.assertEqual(manifest["chart_variants"], list(continuous.CHART_VARIANTS))
+            self.assertEqual(len(manifest["segments"]), 3)
+            replacement = manifest["segments"][-1]
+            self.assertEqual(replacement["start_attempt"], 98)
+            self.assertEqual(replacement["start_round"], 33)
+            self.assertEqual(replacement["variants"], list(continuous.ACTIVE_VARIANTS))
+            self.assertEqual(
+                continuous.segment_for_attempt(manifest, 97)[1]["variants"],
+                list(continuous.LEGACY_VARIANTS),
+            )
+            self.assertEqual(
+                continuous.segment_for_attempt(manifest, 98)[1]["variants"],
+                list(continuous.ACTIVE_VARIANTS),
+            )
 
 
 if __name__ == "__main__":

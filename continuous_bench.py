@@ -22,20 +22,38 @@ import specbench
 
 
 ROOT = Path(__file__).resolve().parent
-VARIANTS = (
+LEGACY_VARIANTS = (
     "uzu-m-spec",
     "omlx-optiq-dflash",
     "omlx-mxfp4-dflash-q4",
 )
+ACTIVE_VARIANTS = (
+    "uzu-m-spec",
+    "omlx-optiq-vlm-mtp",
+    "omlx-mxfp4-vlm-mtp",
+)
+CHART_VARIANTS = (
+    "uzu-m-spec",
+    "omlx-optiq-dflash",
+    "omlx-optiq-vlm-mtp",
+    "omlx-mxfp4-dflash-q4",
+    "omlx-mxfp4-vlm-mtp",
+)
+# Public alias for callers that need the current run roster.
+VARIANTS = ACTIVE_VARIANTS
 LABELS = {
     "uzu-m-spec": "Uzu Mirai-M",
     "omlx-optiq-dflash": "oMLX OptiQ + DFlash 4-bit",
+    "omlx-optiq-vlm-mtp": "oMLX OptiQ + VLM MTP 4-bit",
     "omlx-mxfp4-dflash-q4": "oMLX MXFP4 + DFlash 4-bit",
+    "omlx-mxfp4-vlm-mtp": "oMLX MXFP4 + VLM MTP 4-bit",
 }
 COLORS = {
     "uzu-m-spec": "#4f8cff",
     "omlx-optiq-dflash": "#f29b61",
+    "omlx-optiq-vlm-mtp": "#52c7a5",
     "omlx-mxfp4-dflash-q4": "#d878b2",
+    "omlx-mxfp4-vlm-mtp": "#9b8cff",
 }
 SYSTEM = "Use the supplied reference context. Answer only the final request."
 UNIT = "The worker reads one block, validates its checksum, updates the index, and records latency. "
@@ -85,8 +103,10 @@ def context_for_round(
     return value
 
 
-def variant_for(round_index: int, slot: int) -> str:
-    return VARIANTS[(round_index + slot) % len(VARIANTS)]
+def variant_for(
+    variants: list[str] | tuple[str, ...], round_index: int, slot: int
+) -> str:
+    return variants[(round_index + slot) % len(variants)]
 
 
 def read_events(path: Path) -> list[dict[str, Any]]:
@@ -194,9 +214,8 @@ def render_chart(
     manifest: dict[str, Any],
 ) -> None:
     segments = manifest["segments"]
-    next_round = len(events) // len(VARIANTS)
-    current_segment_index, current_segment = segment_for_round(
-        manifest, next_round
+    current_segment_index, current_segment = segment_for_attempt(
+        manifest, len(events)
     )
     sampling_text = (
         f"collecting {int(current_segment['min_context']):,}–"
@@ -247,7 +266,7 @@ def render_chart(
 
     marks: list[str] = []
     legend: list[str] = []
-    for variant in VARIANTS:
+    for variant in manifest.get("chart_variants", CHART_VARIANTS):
         color = COLORS[variant]
         points = [
             (float(row["context_tokens"]), float(row["decode_tps"]))
@@ -365,23 +384,27 @@ def requested_segment(
         "max_context": args.max_context,
         "output_tokens": args.output_tokens,
         "delay_seconds": args.delay_seconds,
+        "variants": list(ACTIVE_VARIANTS),
     }
 
 
 def same_segment_settings(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    keys = ("seed", "min_context", "max_context", "output_tokens", "delay_seconds")
+    keys = (
+        "seed",
+        "min_context",
+        "max_context",
+        "output_tokens",
+        "delay_seconds",
+        "variants",
+    )
     return all(left[key] == right[key] for key in keys)
 
 
 def migrate_manifest(actual: dict[str, Any]) -> dict[str, Any]:
-    if actual.get("schema_version") == 2:
-        return actual
-    if actual.get("schema_version") != 1:
-        raise RuntimeError("unsupported campaign manifest schema")
-    return {
-        "schema_version": 2,
-        "variants": actual["variants"],
-        "segments": [
+    schema = actual.get("schema_version")
+    if schema == 1:
+        variants = actual["variants"]
+        segments = [
             {
                 "start_attempt": 0,
                 "start_round": 0,
@@ -390,17 +413,31 @@ def migrate_manifest(actual: dict[str, Any]) -> dict[str, Any]:
                 "max_context": actual["max_context"],
                 "output_tokens": actual["output_tokens"],
                 "delay_seconds": actual["delay_seconds"],
+                "variants": list(variants),
             }
-        ],
+        ]
+    elif schema == 2:
+        variants = actual["variants"]
+        segments = [
+            dict(segment, variants=list(variants)) for segment in actual["segments"]
+        ]
+    elif schema == 3:
+        segments = actual["segments"]
+    else:
+        raise RuntimeError("unsupported campaign manifest schema")
+    return {
+        "schema_version": 3,
+        "chart_variants": list(CHART_VARIANTS),
+        "segments": segments,
     }
 
 
-def segment_for_round(
-    manifest: dict[str, Any], round_index: int
+def segment_for_attempt(
+    manifest: dict[str, Any], attempt: int
 ) -> tuple[int, dict[str, Any]]:
     selected_index = 0
     for index, segment in enumerate(manifest["segments"]):
-        if int(segment["start_round"]) > round_index:
+        if int(segment["start_attempt"]) > attempt:
             break
         selected_index = index
     return selected_index, manifest["segments"][selected_index]
@@ -415,23 +452,37 @@ def prepare_campaign(
         (campaign / name).mkdir(exist_ok=True)
     settings_path = campaign / "campaign.json"
     events = read_events(campaign / "events.jsonl")
-    next_round = math.ceil(len(events) / len(VARIANTS))
-    next_attempt = next_round * len(VARIANTS)
-    requested = requested_segment(args, next_attempt, next_round)
     if settings_path.exists():
         manifest = migrate_manifest(json.loads(settings_path.read_text()))
-        if manifest.get("variants") != list(VARIANTS):
-            raise RuntimeError("campaign variants differ from this runner")
         latest = manifest["segments"][-1]
+        requested = requested_segment(
+            args, int(latest["start_attempt"]), int(latest["start_round"])
+        )
         if not same_segment_settings(latest, requested):
             if int(latest["start_attempt"]) >= len(events):
                 manifest["segments"][-1] = requested
+            elif latest["variants"] != requested["variants"]:
+                next_round = max(
+                    (int(event.get("round", -1)) for event in events), default=-1
+                ) + 1
+                manifest["segments"].append(
+                    requested_segment(args, len(events), next_round)
+                )
             else:
-                manifest["segments"].append(requested)
+                roster_size = len(latest["variants"])
+                completed = len(events) - int(latest["start_attempt"])
+                completed_rounds = math.ceil(completed / roster_size)
+                next_attempt = (
+                    int(latest["start_attempt"]) + completed_rounds * roster_size
+                )
+                next_round = int(latest["start_round"]) + completed_rounds
+                manifest["segments"].append(
+                    requested_segment(args, next_attempt, next_round)
+                )
     else:
         manifest = {
-            "schema_version": 2,
-            "variants": list(VARIANTS),
+            "schema_version": 3,
+            "chart_variants": list(CHART_VARIANTS),
             "segments": [requested_segment(args, 0, 0)],
         }
     atomic_write(settings_path, json.dumps(manifest, indent=2) + "\n")
@@ -480,17 +531,20 @@ def main() -> int:
     print(f"resuming at attempt {attempt}; Ctrl-C stops after cleaning up the active server")
     try:
         while True:
-            round_index, slot = divmod(attempt, len(VARIANTS))
+            segment_index, segment = segment_for_attempt(manifest, attempt)
+            variants = segment["variants"]
+            relative_attempt = attempt - int(segment["start_attempt"])
+            relative_round, slot = divmod(relative_attempt, len(variants))
+            round_index = int(segment["start_round"]) + relative_round
             if args.max_rounds and round_index >= args.max_rounds:
                 break
-            segment_index, segment = segment_for_round(manifest, round_index)
             context_tokens = context_for_round(
                 int(segment["seed"]),
                 round_index,
                 int(segment["min_context"]),
                 int(segment["max_context"]),
             )
-            variant = variant_for(round_index, slot)
+            variant = variant_for(variants, round_index, slot)
             prompt = exact_prompt(context_tokens, attempt)
             prompt_path = campaign / "prompts" / f"{attempt:08d}.jsonl"
             atomic_write(prompt_path, json.dumps(prompt) + "\n")

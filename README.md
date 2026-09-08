@@ -164,8 +164,8 @@ configuration, system manifest, exact server commands, and per-variant logs.
 
 ## Continuous deterministic sweep
 
-Run an indefinite seeded sweep across Uzu, OptiQ+DFlash-4bit, and
-MXFP4+DFlash-4bit:
+Run an indefinite seeded sweep across Uzu, OptiQ+VLM-MTP-4bit, and
+MXFP4+VLM-MTP-4bit:
 
 ```sh
 caffeinate -dimsu python3 -u continuous_bench.py \
@@ -177,11 +177,14 @@ caffeinate -dimsu python3 -u continuous_bench.py \
   --delay-seconds 60
 ```
 
-One random context length is generated per round and used by all three engines.
-Engine order rotates deterministically between rounds. The campaign writes an
-append-only `events.jsonl`, per-attempt console logs, the runner's complete raw
-result directories/server logs, exact prompt definitions, and an atomically
-updated `chart.html`. The chart refreshes itself every 15 seconds when open.
+One random context length is generated per round and used by all three active
+engines. Engine order rotates deterministically between rounds. DFlash is
+disabled for new attempts, but the chart continues to render all five series:
+Uzu, both historical DFlash targets, and both VLM MTP targets. The campaign
+writes an append-only `events.jsonl`, per-attempt console logs, the runner's
+complete raw result directories/server logs, exact prompt definitions, and an
+atomically updated `chart.html`. The chart refreshes itself every 15 seconds
+when open.
 
 On a RAM safety stop, `specbench.py` terminates only the active model server;
 the continuous runner records the failure, waits for the configured delay, and
@@ -207,6 +210,10 @@ interrupted partway through a three-engine round, that round finishes with its
 original context before the new range begins. Existing ledger rows and chart
 points are retained. Add `--prepare-only` to migrate metadata and redraw the
 chart without loading a model.
+
+Changing the engine roster starts a new segment immediately instead of running
+the disabled engines merely to finish an old round. The existing campaign keeps
+its DFlash observations and resumes with Uzu plus the two VLM MTP variants.
 
 ## Interpretation
 
