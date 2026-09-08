@@ -165,6 +165,25 @@ continues with the other engines. Press Ctrl-C to stop. Running the exact same
 command resumes from the next attempt and preserves the deterministic schedule.
 Use `--max-rounds N` for a finite campaign.
 
+To keep the overnight results and bias all future full rounds toward the lower
+end, reuse the same campaign directory with a narrower range:
+
+```sh
+caffeinate -dimsu python3 -u continuous_bench.py \
+  --campaign-dir continuous-results/main \
+  --seed 20260908 \
+  --min-context 69 \
+  --max-context 13000 \
+  --output-tokens 512 \
+  --delay-seconds 60
+```
+
+Changed sampling settings are stored as a new campaign segment. If a run was
+interrupted partway through a three-engine round, that round finishes with its
+original context before the new range begins. Existing ledger rows and chart
+points are retained. Add `--prepare-only` to migrate metadata and redraw the
+chart without loading a model.
+
 ## Interpretation
 
 Speculative efficiency is reported in two distinct ways:

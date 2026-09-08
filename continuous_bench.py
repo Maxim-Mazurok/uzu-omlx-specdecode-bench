@@ -191,10 +191,27 @@ def linear_fit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
 def render_chart(
     path: Path,
     events: list[dict[str, Any]],
-    seed: int,
-    maximum_context: int,
-    output_tokens: int,
+    manifest: dict[str, Any],
 ) -> None:
+    segments = manifest["segments"]
+    next_round = len(events) // len(VARIANTS)
+    current_segment_index, current_segment = segment_for_round(
+        manifest, next_round
+    )
+    sampling_text = (
+        f"collecting {int(current_segment['min_context']):,}–"
+        f"{int(current_segment['max_context']):,} context"
+    )
+    if current_segment_index + 1 < len(segments):
+        upcoming = segments[current_segment_index + 1]
+        sampling_text += (
+            f" · next full round {int(upcoming['min_context']):,}–"
+            f"{int(upcoming['max_context']):,}"
+        )
+    maximum_context = max(
+        [int(segment["max_context"]) for segment in segments]
+        + [int(row.get("context_tokens", 0)) for row in events]
+    )
     clean = [
         event
         for event in events
@@ -323,7 +340,7 @@ th,td{{padding:7px 9px;border-bottom:1px solid #333;text-align:right}}th:nth-chi
 @media(prefers-color-scheme:light){{:root{{background:#fff;color:#171717}}p{{color:#666}}svg{{background:#fafafa}}svg text{{fill:#555}}.grid{{stroke:#ddd}}.frame{{stroke:#bbb}}circle{{stroke:#fff}}th,td{{border-color:#ddd}}.axis-title{{fill:#171717}}}}
 </style></head><body>
 <h1>Continuous decode speed vs context</h1>
-<p>{html.escape(last_text)} · seed {seed} · fixed {output_tokens}-token output · refreshes every 15s</p>
+<p>{html.escape(last_text)} · {html.escape(sampling_text)} · seed {int(current_segment['seed'])} · fixed {int(current_segment['output_tokens'])}-token output · segment {current_segment_index + 1} · refreshes every 15s</p>
 <div class="legend">{''.join(legend)}<span>× RAM safety stop</span></div>
 <svg viewBox="0 0 {width} {height}" role="img" aria-label="Decode throughput scatter plot with per-engine trend lines">
 <rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" class="frame"/>
@@ -337,35 +354,88 @@ th,td{{padding:7px 9px;border-bottom:1px solid #333;text-align:right}}th:nth-chi
     atomic_write(path, document)
 
 
-def campaign_settings(args: argparse.Namespace) -> dict[str, Any]:
+def requested_segment(
+    args: argparse.Namespace, start_attempt: int, start_round: int
+) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "start_attempt": start_attempt,
+        "start_round": start_round,
         "seed": args.seed,
         "min_context": max(CHAT_OVERHEAD_AND_SUFFIX_TOKENS, args.min_context),
         "max_context": args.max_context,
         "output_tokens": args.output_tokens,
         "delay_seconds": args.delay_seconds,
-        "variants": list(VARIANTS),
     }
 
 
-def prepare_campaign(args: argparse.Namespace) -> tuple[Path, list[dict[str, Any]]]:
+def same_segment_settings(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    keys = ("seed", "min_context", "max_context", "output_tokens", "delay_seconds")
+    return all(left[key] == right[key] for key in keys)
+
+
+def migrate_manifest(actual: dict[str, Any]) -> dict[str, Any]:
+    if actual.get("schema_version") == 2:
+        return actual
+    if actual.get("schema_version") != 1:
+        raise RuntimeError("unsupported campaign manifest schema")
+    return {
+        "schema_version": 2,
+        "variants": actual["variants"],
+        "segments": [
+            {
+                "start_attempt": 0,
+                "start_round": 0,
+                "seed": actual["seed"],
+                "min_context": actual["min_context"],
+                "max_context": actual["max_context"],
+                "output_tokens": actual["output_tokens"],
+                "delay_seconds": actual["delay_seconds"],
+            }
+        ],
+    }
+
+
+def segment_for_round(
+    manifest: dict[str, Any], round_index: int
+) -> tuple[int, dict[str, Any]]:
+    selected_index = 0
+    for index, segment in enumerate(manifest["segments"]):
+        if int(segment["start_round"]) > round_index:
+            break
+        selected_index = index
+    return selected_index, manifest["segments"][selected_index]
+
+
+def prepare_campaign(
+    args: argparse.Namespace,
+) -> tuple[Path, list[dict[str, Any]], dict[str, Any]]:
     campaign = Path(args.campaign_dir).expanduser().resolve()
     campaign.mkdir(parents=True, exist_ok=True)
     for name in ("attempts", "prompts", "raw"):
         (campaign / name).mkdir(exist_ok=True)
     settings_path = campaign / "campaign.json"
-    expected = campaign_settings(args)
-    if settings_path.exists():
-        actual = json.loads(settings_path.read_text())
-        if actual != expected:
-            raise RuntimeError(
-                "campaign settings differ; use the original command or a new campaign directory"
-            )
-    else:
-        atomic_write(settings_path, json.dumps(expected, indent=2) + "\n")
     events = read_events(campaign / "events.jsonl")
-    return campaign, events
+    next_round = math.ceil(len(events) / len(VARIANTS))
+    next_attempt = next_round * len(VARIANTS)
+    requested = requested_segment(args, next_attempt, next_round)
+    if settings_path.exists():
+        manifest = migrate_manifest(json.loads(settings_path.read_text()))
+        if manifest.get("variants") != list(VARIANTS):
+            raise RuntimeError("campaign variants differ from this runner")
+        latest = manifest["segments"][-1]
+        if not same_segment_settings(latest, requested):
+            if int(latest["start_attempt"]) >= len(events):
+                manifest["segments"][-1] = requested
+            else:
+                manifest["segments"].append(requested)
+    else:
+        manifest = {
+            "schema_version": 2,
+            "variants": list(VARIANTS),
+            "segments": [requested_segment(args, 0, 0)],
+        }
+    atomic_write(settings_path, json.dumps(manifest, indent=2) + "\n")
+    return campaign, events, manifest
 
 
 def parser() -> argparse.ArgumentParser:
@@ -382,6 +452,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--max-rounds", type=int, default=0, help="zero means run until interrupted"
     )
+    result.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="update campaign metadata and chart without running inference",
+    )
     return result
 
 
@@ -392,21 +467,28 @@ def main() -> int:
         raise SystemExit(f"--max-context must be at least {minimum}")
     if args.output_tokens < 2 or args.delay_seconds < 0 or args.max_rounds < 0:
         raise SystemExit("output tokens must be >=2; delay and max rounds must be >=0")
-    campaign, events = prepare_campaign(args)
+    campaign, events, manifest = prepare_campaign(args)
     events_path = campaign / "events.jsonl"
     chart_path = campaign / "chart.html"
-    render_chart(chart_path, events, args.seed, args.max_context, args.output_tokens)
+    render_chart(chart_path, events, manifest)
     attempt = len(events)
     print(f"campaign: {campaign}")
     print(f"chart: {chart_path}")
+    if args.prepare_only:
+        print(f"prepared at attempt {attempt}; no inference was run")
+        return 0
     print(f"resuming at attempt {attempt}; Ctrl-C stops after cleaning up the active server")
     try:
         while True:
             round_index, slot = divmod(attempt, len(VARIANTS))
             if args.max_rounds and round_index >= args.max_rounds:
                 break
+            segment_index, segment = segment_for_round(manifest, round_index)
             context_tokens = context_for_round(
-                args.seed, round_index, minimum, args.max_context
+                int(segment["seed"]),
+                round_index,
+                int(segment["min_context"]),
+                int(segment["max_context"]),
             )
             variant = variant_for(round_index, slot)
             prompt = exact_prompt(context_tokens, attempt)
@@ -426,7 +508,7 @@ def main() -> int:
                 "--variants",
                 variant,
                 "--output-tokens",
-                str(args.output_tokens),
+                str(segment["output_tokens"]),
                 "--repetitions",
                 "1",
             ]
@@ -447,7 +529,11 @@ def main() -> int:
                 "slot": slot,
                 "variant": variant,
                 "context_tokens": context_tokens,
-                "output_tokens": args.output_tokens,
+                "output_tokens": segment["output_tokens"],
+                "sampling_segment": segment_index,
+                "sampling_seed": segment["seed"],
+                "sampling_min_context": segment["min_context"],
+                "sampling_max_context": segment["max_context"],
                 "status": status,
                 "detail": detail,
                 "started_at": started,
@@ -479,13 +565,11 @@ def main() -> int:
                         event[key] = result[key]
             append_jsonl(events_path, event)
             events.append(event)
-            render_chart(
-                chart_path, events, args.seed, args.max_context, args.output_tokens
-            )
+            render_chart(chart_path, events, manifest)
             print(f"status: {status}; chart updated: {chart_path}", flush=True)
             attempt += 1
-            if args.delay_seconds:
-                time.sleep(args.delay_seconds)
+            if segment["delay_seconds"]:
+                time.sleep(float(segment["delay_seconds"]))
     except KeyboardInterrupt:
         print(f"\nstopped; resume with the same command\nchart: {chart_path}")
         return 130
