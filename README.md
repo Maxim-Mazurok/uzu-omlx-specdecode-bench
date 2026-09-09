@@ -36,10 +36,12 @@ The DFlash path provides an independent speculative comparison for the same
 OptiQ target.
 
 External VLM MTP is wired separately for both oMLX targets using the dedicated
-`mlx-community/Qwen3.6-27B-MTP-4bit` assistant checkpoint and block size 2.
-Those variants are opt-in: they are excluded from the default matrix and the
-existing continuous campaign until the functional, parity, memory, and speed
-checks in [`TODO.md`](TODO.md) are complete.
+`mlx-community/Qwen3.6-27B-MTP-4bit` assistant checkpoint and its native block
+size 3. The runner rejects silent VLM-to-LLM fallback and records VLM-MTP
+acceptance, rounds, and tokens per round from the oMLX log. Both variants are
+opt-in. MXFP4 is part of the continuous campaign; OptiQ is manual-only because
+even a 77-token prompt crossed the campaign's 12%-free RAM floor on a 32 GiB
+machine.
 
 ## Fairness controls
 
@@ -164,8 +166,7 @@ configuration, system manifest, exact server commands, and per-variant logs.
 
 ## Continuous deterministic sweep
 
-Run an indefinite seeded sweep across Uzu, OptiQ+VLM-MTP-4bit, and
-MXFP4+VLM-MTP-4bit:
+Run an indefinite seeded sweep across Uzu and MXFP4+VLM-MTP-4bit:
 
 ```sh
 caffeinate -dimsu python3 -u continuous_bench.py \
@@ -177,14 +178,14 @@ caffeinate -dimsu python3 -u continuous_bench.py \
   --delay-seconds 60
 ```
 
-One random context length is generated per round and used by all three active
-engines. Engine order rotates deterministically between rounds. DFlash is
-disabled for new attempts, but the chart continues to render all five series:
-Uzu, both historical DFlash targets, and both VLM MTP targets. The campaign
-writes an append-only `events.jsonl`, per-attempt console logs, the runner's
-complete raw result directories/server logs, exact prompt definitions, and an
-atomically updated `chart.html`. The chart refreshes itself every 15 seconds
-when open.
+One random context length is generated per round and used by both active
+engines. Engine order rotates deterministically between rounds. DFlash and
+OptiQ VLM-MTP are disabled for new attempts, but the chart continues to render
+all five series: Uzu, both historical DFlash targets, and both VLM MTP targets.
+The campaign writes an append-only `events.jsonl`, per-attempt console logs,
+the runner's complete raw result directories/server logs, exact prompt
+definitions, and an atomically updated `chart.html`. The chart refreshes itself
+every 15 seconds when open.
 
 On a RAM safety stop, `specbench.py` terminates only the active model server;
 the continuous runner records the failure, waits for the configured delay, and
@@ -213,7 +214,9 @@ chart without loading a model.
 
 Changing the engine roster starts a new segment immediately instead of running
 the disabled engines merely to finish an old round. The existing campaign keeps
-its DFlash observations and resumes with Uzu plus the two VLM MTP variants.
+its DFlash observations and resumes with Uzu plus MXFP4 VLM MTP. OptiQ VLM-MTP
+remains available for guarded manual runs, but is not scheduled continuously
+because it leaves too little RAM headroom on 32 GiB.
 
 ## Interpretation
 

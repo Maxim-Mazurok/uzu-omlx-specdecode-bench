@@ -57,6 +57,29 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(row["spec_acceptance_percent"], 81.5)
         self.assertAlmostEqual(row["tokens_per_spec_cycle"], 64 / 7)
 
+    def test_vlm_mtp_log(self):
+        row = specbench.parse_spec_log(
+            "vlm_mtp stats: request=abc finish=length rounds=35 "
+            "accepted=29/35 (82.9%) tokens_per_round=1.83 "
+            "emitted=64 block_size=2"
+        )
+        self.assertEqual(row["spec_acceptance_percent"], 82.9)
+        self.assertEqual(row["spec_cycles"], 35)
+        self.assertEqual(row["tokens_per_spec_cycle"], 1.83)
+        self.assertEqual(row["spec_block_size"], 2)
+
+    def test_vlm_mtp_fallback_is_rejected(self):
+        variant = {"id": "vlm", "speculative": "vlm-mtp"}
+        with self.assertRaisesRegex(RuntimeError, "fell back to LLM"):
+            specbench.validate_speculative_runtime(
+                variant, "VLM loading failed; falling back to LLM"
+            )
+
+    def test_vlm_mtp_requires_decode_evidence(self):
+        variant = {"id": "vlm", "speculative": "vlm-mtp"}
+        with self.assertRaisesRegex(RuntimeError, "without VLM-MTP decode evidence"):
+            specbench.validate_speculative_runtime(variant, "ordinary completion")
+
     def test_disabled_variant_is_rejected(self):
         config = {"variants": [{"id": "off", "enabled": False}]}
         with self.assertRaisesRegex(ValueError, "disabled variants"):
@@ -180,6 +203,24 @@ class MetricsTests(unittest.TestCase):
                 (view / "model" / "model.safetensors.index.json").read_text()
             )
             self.assertEqual(index["weight_map"]["mtp.fc.weight"], "mtp.safetensors")
+
+    def test_external_vlm_mtp_view_excludes_native_mtp_sidecar(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "models" / "org" / "model"
+            source.mkdir(parents=True)
+            (source / "config.json").write_text("{}")
+            (source / "model.safetensors").write_bytes(b"target")
+            (source / "mtp.safetensors").write_bytes(b"native sidecar")
+
+            view = specbench.omlx_model_view(
+                root / "models",
+                {"model": "model", "speculative": "vlm-mtp"},
+                root / "view",
+            )
+
+            self.assertTrue((view / "model" / "model.safetensors").is_file())
+            self.assertFalse((view / "model" / "mtp.safetensors").exists())
 
 
 if __name__ == "__main__":

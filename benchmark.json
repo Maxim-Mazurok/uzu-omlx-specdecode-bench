@@ -76,7 +76,7 @@
       "engine": "omlx",
       "model": "Qwen3.6-27B-MXFP4",
       "speculative": "vlm-mtp",
-      "vlm_mtp_draft_block_size": 2,
+      "vlm_mtp_draft_block_size": 3,
       "baseline": "omlx-mxfp4-base",
       "default_run": false
     },
@@ -107,7 +107,7 @@
       "engine": "omlx",
       "model": "Qwen3.6-27B-OptiQ-4bit",
       "speculative": "vlm-mtp",
-      "vlm_mtp_draft_block_size": 2,
+      "vlm_mtp_draft_block_size": 3,
       "baseline": "omlx-optiq-base",
       "default_run": false
     }

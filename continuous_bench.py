@@ -29,7 +29,6 @@ LEGACY_VARIANTS = (
 )
 ACTIVE_VARIANTS = (
     "uzu-m-spec",
-    "omlx-optiq-vlm-mtp",
     "omlx-mxfp4-vlm-mtp",
 )
 CHART_VARIANTS = (

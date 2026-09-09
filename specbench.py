@@ -37,6 +37,12 @@ DFLASH_RE = re.compile(
     r"(?P<tps>[\d.]+) tok/s, acceptance=(?P<rate>[\d.]+)%, "
     r"cycles=(?P<cycles>\d+)"
 )
+VLM_MTP_RE = re.compile(
+    r"vlm_mtp stats: .*?rounds=(?P<cycles>\d+) "
+    r"accepted=(?P<accepted>\d+)/(?P<drafted>\d+) "
+    r"\((?P<rate>[\d.]+)%\) tokens_per_round=(?P<tpc>[\d.]+) "
+    r"emitted=(?P<tokens>\d+) block_size=(?P<block_size>\d+)"
+)
 MTP_NORM_SUFFIXES = (
     "input_layernorm.weight",
     "post_attention_layernorm.weight",
@@ -238,6 +244,15 @@ def omlx_model_view(
         patched_names.update({"model.safetensors.index.json", "mtp.safetensors"})
     for child in source.iterdir():
         if child.name in patched_names:
+            continue
+        # OptiQ ships a native-MTP sidecar that is intentionally absent from
+        # its target weight index. mlx-vlm nevertheless discovers loose
+        # safetensors files, so exposing this sidecar to an external VLM-MTP
+        # run makes target loading fail with unexpected ``mtp.*`` parameters.
+        if (
+            variant["speculative"] == "vlm-mtp"
+            and child.name == "mtp.safetensors"
+        ):
             continue
         link = target / child.name
         if not link.exists():
@@ -474,7 +489,33 @@ def parse_spec_log(chunk: str) -> dict[str, Any]:
             "tokens_per_spec_cycle": int(value["tokens"]) / int(value["cycles"]),
             "engine_reported_tps": float(value["tps"]),
         }
+    vlm_mtp = list(VLM_MTP_RE.finditer(chunk))
+    if vlm_mtp:
+        value = vlm_mtp[-1].groupdict()
+        return {
+            "spec_acceptance_percent": float(value["rate"]),
+            "spec_accepted_tokens": int(value["accepted"]),
+            "spec_drafted_tokens": int(value["drafted"]),
+            "spec_cycles": int(value["cycles"]),
+            "tokens_per_spec_cycle": float(value["tpc"]),
+            "spec_block_size": int(value["block_size"]),
+        }
     return {}
+
+
+def validate_speculative_runtime(variant: dict[str, Any], chunk: str) -> None:
+    """Reject silent speculative-engine fallback before recording a result."""
+    if variant.get("speculative") != "vlm-mtp":
+        return
+    fallback_markers = ("VLM loading failed", "falling back to LLM")
+    if any(marker in chunk for marker in fallback_markers):
+        raise RuntimeError(
+            f"{variant['id']} did not load as VLM-MTP; oMLX fell back to LLM"
+        )
+    if "vlm_mtp decode started:" not in chunk or "vlm_mtp stats:" not in chunk:
+        raise RuntimeError(
+            f"{variant['id']} returned output without VLM-MTP decode evidence"
+        )
 
 
 def memory_snapshot(pid: int) -> dict[str, int | None]:
@@ -625,7 +666,9 @@ def run_one(
         log.seek(log_offset)
         chunk = log.read()
         new_offset = log.tell()
-    result.update(parse_spec_log(chunk.decode(errors="replace")))
+    log_chunk = chunk.decode(errors="replace")
+    validate_speculative_runtime(variant, log_chunk)
+    result.update(parse_spec_log(log_chunk))
     result.update(
         {
             "server_rss_before_bytes": memory_before["server_rss_bytes"],
@@ -979,12 +1022,27 @@ def write_reports(
 
 
 def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    variants = selected_variants(config, args.variants)
+    variants = [dict(row) for row in selected_variants(config, args.variants)]
+    block_override = getattr(args, "vlm_mtp_block_size", None)
+    if block_override is not None:
+        if block_override < 2:
+            raise ValueError("--vlm-mtp-block-size must be at least 2")
+        selected_vlm = [row for row in variants if row["speculative"] == "vlm-mtp"]
+        if not selected_vlm:
+            raise ValueError(
+                "--vlm-mtp-block-size requires at least one VLM-MTP variant"
+            )
+        for row in selected_vlm:
+            row["vlm_mtp_draft_block_size"] = block_override
     prompts = load_prompts(expand(args.prompts))
     if args.prompt_ids:
         wanted = set(args.prompt_ids.split(","))
         prompts = [row for row in prompts if row["id"] in wanted]
     common = dict(config["common"])
+    if getattr(args, "warmup_tokens", None) is not None:
+        common["warmup_tokens"] = args.warmup_tokens
+    if getattr(args, "cooldown_seconds", None) is not None:
+        common["cooldown_seconds"] = args.cooldown_seconds
     output_tokens = (
         [int(x) for x in args.output_tokens.split(",")]
         if args.output_tokens
@@ -1139,6 +1197,21 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--prompt-ids", help="comma-separated prompt IDs")
     run.add_argument("--output-tokens", help="comma-separated exact output caps")
     run.add_argument("--repetitions", type=int)
+    run.add_argument(
+        "--warmup-tokens",
+        type=int,
+        help="override the untimed warmup output length",
+    )
+    run.add_argument(
+        "--cooldown-seconds",
+        type=float,
+        help="override the delay between selected variants",
+    )
+    run.add_argument(
+        "--vlm-mtp-block-size",
+        type=int,
+        help="override VLM-MTP total tokens per speculative round",
+    )
     run.add_argument(
         "--smoke", action="store_true", help="one prompt, 32 output tokens, one repetition"
     )

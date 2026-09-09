@@ -1,6 +1,7 @@
 import importlib.util
 import argparse
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,11 +114,12 @@ class ContinuousBenchTests(unittest.TestCase):
                 ],
             }
             (campaign / "campaign.json").write_text(json.dumps(old))
+            roster_size = len(continuous.VARIANTS)
             events = [
                 {
                     "attempt": index,
-                    "round": index // 3,
-                    "variant": continuous.VARIANTS[index % 3],
+                    "round": index // roster_size,
+                    "variant": continuous.VARIANTS[index % roster_size],
                 }
                 for index in range(95)
             ]
@@ -135,14 +137,16 @@ class ContinuousBenchTests(unittest.TestCase):
             self.assertEqual((campaign / "events.jsonl").read_text(), ledger)
             self.assertEqual(loaded, events)
             self.assertEqual(len(manifest["segments"]), 2)
-            self.assertEqual(manifest["segments"][1]["start_attempt"], 96)
-            self.assertEqual(manifest["segments"][1]["start_round"], 32)
+            next_attempt = math.ceil(len(events) / roster_size) * roster_size
+            next_round = math.ceil(len(events) / roster_size)
+            self.assertEqual(manifest["segments"][1]["start_attempt"], next_attempt)
+            self.assertEqual(manifest["segments"][1]["start_round"], next_round)
             self.assertEqual(
-                continuous.segment_for_attempt(manifest, 95)[1]["max_context"],
+                continuous.segment_for_attempt(manifest, next_attempt - 1)[1]["max_context"],
                 50000,
             )
             self.assertEqual(
-                continuous.segment_for_attempt(manifest, 96)[1]["max_context"],
+                continuous.segment_for_attempt(manifest, next_attempt)[1]["max_context"],
                 13000,
             )
 
@@ -165,7 +169,7 @@ class ContinuousBenchTests(unittest.TestCase):
                     "variants": list(continuous.VARIANTS),
                 },
                 {
-                    "start_attempt": 3,
+                    "start_attempt": len(continuous.VARIANTS),
                     "start_round": 1,
                     "seed": 1,
                     "min_context": 69,
