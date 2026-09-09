@@ -39,8 +39,5 @@ already crossed the 12%-free safety floor at a tiny prompt.
 ## Historical-data disposition
 
 All 64 earlier VLM-MTP continuous rows were removed from active plotting and
-preserved under
-`continuous-results/main/archive/20260909-vlm-mtp-block2-prevalidation/`.
-That archive contains the selected rows, the complete pre-migration ledger,
-and the old chart. Raw per-run artifacts remain at the paths recorded in the
-archived events.
+preserved in a local, gitignored archive. They are excluded from the curated
+public dataset because the runs predate strict backend validation.

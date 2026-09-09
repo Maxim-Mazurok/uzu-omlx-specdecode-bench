@@ -38,4 +38,6 @@ The result is therefore: 10k fits and is benchmarkable; 50k does not meet this
 project's RAM/no-swap fairness criterion on the current 32 GiB system with the
 normal desktop workload present.
 
-Raw 10k data and the generated report are in `results/20260908-000023/`.
+The compact public measurements are included in
+[`context_sweep_results.csv`](context_sweep_results.csv). Raw responses, logs,
+and machine-local manifests are intentionally excluded from version control.

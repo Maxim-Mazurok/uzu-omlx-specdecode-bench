@@ -80,8 +80,10 @@ and the full campaign used an identical 512-token untimed warmup for every
 variant. Prefix, KV, response, DFlash RAM/SSD, and model-discovery caches stayed
 disabled; compiled Metal kernels were deliberately warmed before timing.
 
-Raw data and the generated report are stored under
-`results/20260907-221333/`.
+The public metric-only rows are stored in
+[`docs/data/full-benchmark.csv`](docs/data/full-benchmark.csv). Raw responses,
+logs, and machine-local manifests are intentionally excluded from version
+control.
 
 See [`LONG_CONTEXT_RESULTS.md`](LONG_CONTEXT_RESULTS.md) for the exact 10k
 comparison and the RAM-limited 50k attempt.

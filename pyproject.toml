@@ -3,7 +3,21 @@ name = "uzu-omlx-specdecode-bench"
 version = "0.1.0"
 description = "A thin, cache-controlled Uzu versus oMLX speculative-decoding benchmark"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+readme = "README.md"
+authors = [{ name = "Maxim Mazurok" }]
+keywords = ["apple-silicon", "llm", "mlx", "speculative-decoding"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://maxim-mazurok.github.io/uzu-omlx-specdecode-bench/"
+Repository = "https://github.com/Maxim-Mazurok/uzu-omlx-specdecode-bench"
+Results = "https://maxim-mazurok.github.io/uzu-omlx-specdecode-bench/"
 
 [project.scripts]
 specbench = "specbench:main"

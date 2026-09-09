@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If this benchmark informs your work, please cite the repository."
+title: "Uzu vs oMLX speculative-decoding benchmark"
+type: software
+authors:
+  - family-names: Mazurok
+    given-names: Maxim
+repository-code: "https://github.com/Maxim-Mazurok/uzu-omlx-specdecode-bench"
+url: "https://maxim-mazurok.github.io/uzu-omlx-specdecode-bench/"
+license: MIT
+version: 0.1.0
+date-released: 2026-09-09

@@ -86,7 +86,7 @@ retained as diagnostic evidence but is not the apples-to-apples comparison.
   three-repetition confirmation.
 - Automatic stop below 12% free memory or above 4 GiB campaign swap growth.
 
-Raw clean Uzu data are in `results/20260908-002910`; clean OptiQ data and the
-20k safety-stop log are in `results/20260908-004419`. MXFP4 BF16-draft data are
-in `results/20260908-012406`; MXFP4 4-bit-draft data are in
-`results/20260908-013829`.
+The compact public measurements are in
+[`context_sweep_results.csv`](context_sweep_results.csv). Raw responses, server
+logs, and machine-local manifests remain local and are intentionally excluded
+from version control.

@@ -1,237 +1,213 @@
 # Uzu vs oMLX speculative-decoding benchmark
 
-A thin, stdlib-only CLI harness for an apples-to-apples comparison of Uzu and
-oMLX on Qwen3.6-27B. It measures speculative decoding against a no-speculation
-baseline for the **same target checkpoint**, then reports throughput gain and
-available speculative-efficiency counters.
+A small, stdlib-only harness for comparing local Qwen3.6-27B inference on
+Apple silicon. It keeps prompts, output caps, sampling, cache policy, warmup,
+and memory guards aligned across [Uzu](https://github.com/trymirai/uzu) and
+[oMLX](https://github.com/jundot/omlx).
 
-The default matrix is:
+**[Explore the interactive results](https://maxim-mazurok.github.io/uzu-omlx-specdecode-bench/)**
+· [Read the findings](RESULTS.md) · [Inspect the methodology](#methodology)
 
-| Target checkpoint | Baseline | Speculative path |
+> **Bottom line:** Uzu was the fastest practical configuration in these tests.
+> oMLX gained substantially from speculation, and MXFP4 + external VLM MTP
+> came within 6.7% of Uzu's decode speed over eight matched random contexts.
+> At long context, prefill and unified-memory pressure mattered more than the
+> modest decline in steady-state decode speed.
+
+## Headline results
+
+Measured on a base Apple M5 Mac with 32 GiB unified memory. These are local
+single-stream measurements, not universal model or engine rankings.
+
+| Finding | Result |
+|---|---:|
+| Fastest formal-campaign configuration | **Uzu, 20.18 decode tok/s** |
+| Fastest oMLX configuration | **OptiQ + 4-bit DFlash, 15.37 tok/s** |
+| OptiQ + DFlash gain vs the same target | **+140.1%** |
+| OptiQ + repaired native MTP gain | **+111.9%** |
+| 10k-context decode lead, Uzu vs OptiQ + DFlash | **+19.0%** |
+| Latest matched-context lead, Uzu vs MXFP4 + VLM MTP | **+6.7%** |
+| Largest clean fixed-output context under the RAM guard | **Uzu: 40k** |
+
+See [RESULTS.md](RESULTS.md) for the synthesis and caveats, or drill into the
+individual campaigns:
+
+- [Formal 108-generation campaign](BENCHMARK_RESULTS.md)
+- [Fixed context-length sweep](CONTEXT_SWEEP_RESULTS.md)
+- [10k comparison and 50k safety stop](LONG_CONTEXT_RESULTS.md)
+- [VLM-MTP block-size tuning](VLM_MTP_TUNING_RESULTS.md)
+- [Curated machine-readable data](docs/data/)
+
+## What is compared
+
+| Target checkpoint | Target-only baseline | Speculative paths |
 |---|---|---|
-| Uzu Mirai-M-4 | unavailable in public CLI | bundled Mirai-M speculator |
-| oMLX MXFP4 | target only | DFlash; external VLM MTP (opt-in, pending) |
-| oMLX OptiQ-4bit | target only | DFlash; native Lightning MTP; external VLM MTP (opt-in, pending) |
+| Uzu Mirai-M-4 | Not exposed by tested CLI | Bundled Mirai-M speculator |
+| oMLX MXFP4 | Yes | DFlash; external VLM MTP |
+| oMLX OptiQ-4bit | Yes | DFlash; repaired native Lightning MTP; external VLM MTP |
 
-Uzu 0.5.26 treats the bundled speculator as a required checkpoint artifact and
-has no public no-speculation switch. The harness therefore runs Uzu Mirai-M and
-reports its verification efficiency, but deliberately disables the impossible
-`uzu-m-base` variant instead of presenting a false speedup. The variant remains
-in the config as an explicit capability gap.
+The tested Uzu 0.5.26 CLI requires its bundled speculator and has no public
+switch to disable it. The harness therefore reports Uzu verification efficiency
+but does **not** invent a target-only baseline or a speculative speedup.
 
-MXFP4 does not ship `mtp.*` weights, so it cannot use native MTP. The installed
-OptiQ checkpoint does ship `mtp.safetensors`; no separate drafter is needed for
-that pair. Its converted weight index omits the separate sidecar, so the runner
-creates a per-run hardlink view and maps the MTP tensors and their OptiQ
-quantization metadata into the view's config/index. The downloaded sidecar also
-retains raw Qwen RMSNorm weights while the backbone is already in MLX
-convention. oMLX's indexed-shard loader repairs only four of seven norms on
-this path, which caused 0% draft acceptance. The runner copies only the 300 MB
-MTP sidecar into the temporary view, shifts all seven norms to MLX convention,
-and leaves the downloaded checkpoint untouched. All 19 GB target shards remain
-hardlinked.
+The tested oMLX 0.6.4 installation exposes acceptance and cycle counters.
+OptiQ's native MTP sidecar needed a temporary, per-run metadata/norm repair;
+the downloaded checkpoint is never modified. External VLM MTP uses
+`mlx-community/Qwen3.6-27B-MTP-4bit` with block size 3, selected by the included
+block sweep.
 
-Native MTP uses depth 2, the model author's documented empirical sweet spot.
-The DFlash path provides an independent speculative comparison for the same
-OptiQ target.
+## Quick start
 
-External VLM MTP is wired separately for both oMLX targets using the dedicated
-`mlx-community/Qwen3.6-27B-MTP-4bit` assistant checkpoint and its native block
-size 3. The runner rejects silent VLM-to-LLM fallback and records VLM-MTP
-acceptance, rounds, and tokens per round from the oMLX log. Both variants are
-opt-in. MXFP4 is part of the continuous campaign; OptiQ is manual-only because
-even a 77-token prompt crossed the campaign's 12%-free RAM floor on a 32 GiB
-machine.
+Requirements:
 
-## Fairness controls
+- An Apple-silicon Mac with enough unified memory for the selected target and
+  drafter. The full matrix here was designed around 32 GiB.
+- Python 3.11 or newer.
+- Working `uzu`, `omlx`, and Hugging Face CLI installations.
+- Local target checkpoints matching the names in [`benchmark.json`](benchmark.json).
 
-- Identical messages and exact `max_tokens` caps for every variant.
-- Strict validation that prompt-token and completion-token counts match.
-- Greedy decoding: temperature `0`, top-p `1`, top-k `1`, thinking off.
-- Neutral repetition/presence/min-p settings; they are recorded but not sent
-  because Uzu does not expose those request fields.
-- Seed omitted because Uzu does not expose a seed. Greedy decoding removes the
-  practical need for it.
-- One request at a time and one loaded server/model at a time.
-- Uzu prefix cache disabled; oMLX paged/SSD cache and Hugging Face cache
-  discovery disabled; DFlash's private RAM and SSD prefix caches disabled.
-- Every output length is a fresh request. Longer output therefore grows only
-  that request's KV context instead of inheriting prior generated context.
-- A fresh 512-token Metal/kernel warmup is excluded for each loaded variant.
-  Request/KV caches remain disabled during warmup and measurement. Raw server
-  logs, full responses, hashes, timings, and effective settings are retained
-  under `results/`.
-- Per-request server RSS and system swap deltas are captured, making memory
-  pressure visible instead of silently counting swap-throttled runs as normal.
-- A live watchdog checks memory during long prefills and terminates only the
-  active benchmark server if free RAM or campaign swap growth crosses the
-  configured safety limit.
-
-Throughput is measured from the first to last streamed content event as
-`(completion_tokens - 1) / seconds`. End-to-end throughput and TTFT are also
-stored. The report compares each speculative variant only to its paired target
-baseline—never across different quantizations.
-
-oMLX exposes true MTP/DFlash acceptance in its logs. Uzu 0.5.26 exposes
-`spec_verify_ct`, not accepted/drafted counts, so the harness reports tokens per
-target verification and approximate target-pass reduction for Uzu, without
-mislabeling it as draft acceptance.
-
-## Usage
-
-No model is loaded by these commands:
+Clone and inspect the plan without loading a model:
 
 ```sh
-python3 specbench.py plan
-python3 specbench.py doctor
+git clone https://github.com/Maxim-Mazurok/uzu-omlx-specdecode-bench.git
+cd uzu-omlx-specdecode-bench
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
+python specbench.py doctor
+python specbench.py plan
 ```
 
-Download the external DFlash drafter (3.5 GB):
+The configuration uses `~`-relative paths, so it does not assume another
+user's home directory. Edit [`benchmark.json`](benchmark.json) if your model
+names or locations differ.
+
+Download the optional draft checkpoints:
 
 ```sh
 python3 specbench.py download-draft
-```
-
-Later, download the external Qwen3.6 VLM MTP drafter (about 258 MB):
-
-```sh
 python3 specbench.py download-vlm-mtp
 ```
 
-The VLM MTP download is not required for the default matrix.
-
-Run a functional six-variant smoke test:
+Run a small functional check first:
 
 ```sh
 python3 specbench.py run --smoke
 ```
 
-Run the default benchmark (three prompts, 128 and 512 output tokens, three
-repetitions per case):
+Then run the default formal matrix:
 
 ```sh
 python3 specbench.py run
 ```
 
-Or select a paired comparison:
+Select a narrower paired comparison when memory is limited:
 
 ```sh
 python3 specbench.py run \
-  --variants omlx-optiq-base,omlx-optiq-mtp \
-  --prompt-ids code-stream \
-  --output-tokens 128,512,1024 \
-  --repetitions 3
-```
-
-After completing the VLM MTP setup TODO, select its opt-in variants explicitly:
-
-```sh
-python3 specbench.py run \
-  --variants omlx-mxfp4-base,omlx-mxfp4-vlm-mtp,omlx-optiq-base,omlx-optiq-vlm-mtp \
+  --variants omlx-optiq-base,omlx-optiq-dflash \
   --prompt-ids code-stream \
   --output-tokens 128,512 \
   --repetitions 3
 ```
 
-Run the two fastest configurations with exact 10k- and 50k-token prompts:
+## Continuous context sweep
 
-```sh
-python3 specbench.py run \
-  --prompts long_context_prompts.jsonl \
-  --variants uzu-m-spec,omlx-optiq-dflash \
-  --output-tokens 512 \
-  --repetitions 3
-```
-
-The long-context prompt definitions are compact repeat specifications expanded
-in memory by the runner. Their expected token counts are checked against each
-server response before a row is accepted.
-
-Map decode speed over exact context checkpoints with fixed 512-token outputs:
-
-```sh
-python3 specbench.py run \
-  --prompts context_sweep_prompts.jsonl \
-  --prompt-ids context-1k,context-5k,context-10k,context-20k,context-30k,context-40k \
-  --variants uzu-m-spec,omlx-optiq-dflash \
-  --output-tokens 512 \
-  --repetitions 1
-```
-
-See [`CONTEXT_SWEEP_RESULTS.md`](CONTEXT_SWEEP_RESULTS.md) for the 32 GB Mac
-results and practical RAM limits.
-
-Each timestamped run contains `REPORT.md`, CSV/JSONL results, an effective
-configuration, system manifest, exact server commands, and per-variant logs.
-
-## Continuous deterministic sweep
-
-Run an indefinite seeded sweep across Uzu and MXFP4+VLM-MTP-4bit:
+The continuous runner chooses one context length per round and presents it to
+each active engine. The schedule and engine rotation are deterministic, and a
+restart resumes the existing append-only campaign.
 
 ```sh
 caffeinate -dimsu python3 -u continuous_bench.py \
   --campaign-dir continuous-results/main \
   --seed 20260908 \
   --min-context 69 \
-  --max-context 50000 \
+  --max-context 35000 \
   --output-tokens 512 \
-  --delay-seconds 60
+  --delay-seconds 30
 ```
 
-One random context length is generated per round and used by both active
-engines. Engine order rotates deterministically between rounds. DFlash and
-OptiQ VLM-MTP are disabled for new attempts, but the chart continues to render
-Uzu, both historical DFlash targets, and MXFP4 VLM MTP.
-The campaign writes an append-only `events.jsonl`, per-attempt console logs,
-the runner's complete raw result directories/server logs, exact prompt
-definitions, and an atomically updated `chart.html`. The chart fills 90% of the
-browser viewport, refreshes itself every 15 seconds, and lets you toggle each
-series from the legend; hidden-series choices survive refreshes.
+The current active roster is Uzu plus MXFP4 + VLM MTP. Historical DFlash
+measurements remain on the chart; invalid pre-validation VLM rows and the
+RAM-heavy OptiQ + external VLM configuration are excluded.
 
-On a RAM safety stop, `specbench.py` terminates only the active model server;
-the continuous runner records the failure, waits for the configured delay, and
-continues with the other engines. Press Ctrl-C to stop. Running the exact same
-command resumes from the next attempt and preserves the deterministic schedule.
-Use `--max-rounds N` for a finite campaign.
+Running the same command keeps the ledger and chart. Changing the range creates
+a new campaign segment without rewriting old observations. Add
+`--prepare-only` to migrate metadata and redraw without loading a model.
 
-To keep the overnight results and bias all future full rounds toward the lower
-end, reuse the same campaign directory with a narrower range:
+To refresh the allowlisted public snapshot after collecting new results:
 
 ```sh
-caffeinate -dimsu python3 -u continuous_bench.py \
-  --campaign-dir continuous-results/main \
-  --seed 20260908 \
-  --min-context 69 \
-  --max-context 13000 \
-  --output-tokens 512 \
-  --delay-seconds 60
+python3 export_public_results.py
 ```
 
-Changed sampling settings are stored as a new campaign segment. If a run was
-interrupted partway through a three-engine round, that round finishes with its
-original context before the new range begins. Existing ledger rows and chart
-points are retained. Add `--prepare-only` to migrate metadata and redraw the
-chart without loading a model.
+Raw runs remain ignored. The exporter publishes only benchmark metrics—never
+generated text, hashes, absolute paths, hostnames, IP addresses, or server logs.
 
-Changing the engine roster starts a new segment immediately instead of running
-the disabled engines merely to finish an old round. The existing campaign keeps
-its DFlash observations and resumes with Uzu plus MXFP4 VLM MTP. OptiQ VLM-MTP
-remains available for guarded manual runs, but is not scheduled continuously
-because it leaves too little RAM headroom on 32 GiB.
+## Methodology
 
-## Interpretation
+- Identical messages and exact completion-token caps for every variant.
+- Greedy decoding: temperature 0, top-p 1, top-k 1, thinking disabled.
+- Neutral penalty settings; unsupported request fields are not sent.
+- One request and one loaded model/drafter pair at a time.
+- Uzu prefix cache disabled; oMLX paged/SSD cache and model discovery disabled;
+  DFlash RAM/SSD prefix caches disabled.
+- Fresh requests for each output length, so one generation never inherits the
+  previous generation's KV context.
+- Identical excluded 512-token warmups before measurement.
+- Strict prompt/completion token-count validation.
+- Live memory watchdog: stop the active server below 12% free RAM or above
+  4 GiB campaign swap growth.
 
-Speculative efficiency is reported in two distinct ways:
+Decode throughput is measured from the first to last streamed content event as
+`(completion_tokens - 1) / seconds`. TTFT and end-to-end throughput are stored
+separately.
 
-1. **Wall-clock gain:** speculative decode tok/s divided by its paired baseline.
-2. **Draft efficiency:** oMLX acceptance percentage and tokens per cycle; Uzu
-   tokens per verification pass and target-pass reduction.
+## Reading speculative efficiency
 
-High acceptance does not guarantee a speedup—the draft and verification work
-can cost more than the target passes they save. Treat wall-clock gain as the
-deciding result and the efficiency counters as the explanation.
+The project deliberately keeps two concepts separate:
 
-The OptiQ and `omlx-mxfp4-dflash-q4` variants load DFlash at 4-bit, providing
-the closest target-format comparison within a 32 GB unified-memory budget. The
-original `omlx-mxfp4-dflash` BF16-draft variant remains available as a diagnostic
-control; it is slower and reaches the long-context RAM boundary earlier.
+1. **Wall-clock gain:** speculative decode throughput divided by the matching
+   target-only throughput.
+2. **Draft efficiency:** oMLX draft acceptance/tokens per cycle, or Uzu output
+   tokens per target verification and estimated target-pass reduction.
+
+High acceptance does not guarantee a speedup. Draft cost, verification width,
+target-pass cost, and memory traffic can outweigh the saved target passes.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| [`specbench.py`](specbench.py) | Paired benchmark runner and report generator |
+| [`continuous_bench.py`](continuous_bench.py) | Deterministic resumable context sweep |
+| [`benchmark.json`](benchmark.json) | Engines, checkpoints, controls, and RAM limits |
+| [`prompts.jsonl`](prompts.jsonl) | Short benchmark prompts |
+| [`context_sweep_prompts.jsonl`](context_sweep_prompts.jsonl) | Exact context checkpoints |
+| [`export_public_results.py`](export_public_results.py) | Privacy-preserving public-data exporter |
+| [`docs/`](docs/) | Static GitHub Pages report and curated datasets |
+| [`tests/`](tests/) | Unit tests for parsing, guards, scheduling, and export |
+
+## Scope and limitations
+
+- Results apply to the named checkpoints, engine versions, OS, and hardware.
+- Uzu and oMLX use different target quantizations; cross-engine comparisons are
+  practical system comparisons, not isolated runtime comparisons.
+- The one-repetition context sweep maps curve shape and memory limits; the
+  formal short-context campaign provides repeated measurements.
+- macOS memory reclamation can make uncached prefill latency noisy.
+- RAM-stop points mark this project's fairness boundary, not a model's absolute
+  context limit.
+- This is an independent project and is not affiliated with Uzu, Mirai, oMLX,
+  Alibaba, Qwen, or the checkpoint publishers.
+
+## Contributing and security
+
+Benchmark contributions should include exact model identifiers, software and
+hardware versions, complete controls, and raw-to-curated provenance. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Please do not commit raw server logs or result directories. If you find a
+security or privacy issue, follow [SECURITY.md](SECURITY.md).
+
+Released under the [MIT License](LICENSE).

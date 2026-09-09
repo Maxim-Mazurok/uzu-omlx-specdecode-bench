@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="description" content="Uzu versus oMLX speculative-decoding benchmarks for Qwen3.6-27B on a 32 GiB Apple M5 Mac.">
+  <meta name="theme-color" content="#f3efe5">
+  <title>Uzu vs oMLX — speculative decoding on Apple silicon</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: oklch(95.6% 0.016 84);
+      --ink: oklch(22% 0.025 247);
+      --muted: oklch(43% 0.026 247);
+      --rule: oklch(76% 0.025 84);
+      --panel: oklch(98.2% 0.01 84);
+      --blue: #0067b1;
+      --orange: #b85c00;
+      --magenta: #a53070;
+      --green: #007a5a;
+      --focus: #7a3e00;
+      font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font-size: 1rem; line-height: 1.6; }
+    a { color: inherit; text-underline-offset: .18em; text-decoration-thickness: .08em; }
+    a:hover { text-decoration-thickness: .14em; }
+    a:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .skip { position: fixed; left: 1rem; top: -6rem; z-index: 10; background: var(--ink); color: var(--paper); padding: .7rem 1rem; }
+    .skip:focus { top: 1rem; }
+    .page { width: min(90vw, 92rem); margin: 0 auto; }
+    header { padding: clamp(3rem, 8vw, 8rem) 0 clamp(2rem, 5vw, 5rem); border-bottom: 1px solid var(--rule); }
+    .eyebrow { margin: 0 0 1rem; color: var(--muted); font-size: .78rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    h1, h2, h3 { margin: 0; line-height: 1.02; letter-spacing: -.035em; }
+    h1, h2 { font-family: "Iowan Old Style", Baskerville, "Times New Roman", serif; font-weight: 600; }
+    h1 { max-width: 13ch; font-size: clamp(3rem, 8vw, 7.7rem); }
+    .lede { max-width: 58ch; margin: clamp(1.5rem, 3vw, 2.5rem) 0 0 auto; color: var(--muted); font-size: clamp(1.08rem, 1.8vw, 1.45rem); }
+    .lede strong { color: var(--ink); }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
+    .metric { min-height: 9.5rem; padding: 1.5rem 1.2rem 1.8rem 0; border-right: 1px solid var(--rule); }
+    .metric + .metric { padding-left: 1.2rem; }
+    .metric:last-child { border-right: 0; }
+    .metric strong { display: block; font-family: "Iowan Old Style", Baskerville, serif; font-size: clamp(2rem, 4vw, 3.6rem); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+    .metric span { display: block; max-width: 20ch; margin-top: .6rem; color: var(--muted); font-size: .9rem; line-height: 1.35; }
+    main section { padding: clamp(3.5rem, 7vw, 7rem) 0; border-bottom: 1px solid var(--rule); }
+    .section-head { display: grid; grid-template-columns: minmax(12rem, .7fr) minmax(20rem, 1.3fr); gap: clamp(2rem, 8vw, 9rem); margin-bottom: clamp(2rem, 4vw, 3.5rem); }
+    h2 { max-width: 12ch; font-size: clamp(2.4rem, 5vw, 5rem); }
+    .section-copy { max-width: 62ch; color: var(--muted); }
+    .section-copy p { margin-top: 0; }
+    .section-copy strong { color: var(--ink); }
+    .chart-tools { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; margin: 0 0 1rem; }
+    .legend-button { min-height: 2.75rem; border: 1px solid var(--rule); border-radius: 0; padding: .55rem .75rem; background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+    .legend-button::before { content: ""; display: inline-block; width: 1.35rem; height: .24rem; margin-right: .5rem; vertical-align: .18rem; background: var(--series); }
+    .legend-button:hover { border-color: var(--ink); }
+    .legend-button[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; opacity: .58; }
+    .ram-key { color: var(--muted); font-size: .9rem; margin-left: .25rem; }
+    .chart-shell { width: 100%; height: min(90vh, 46rem); min-height: 30rem; overflow: auto; border: 1px solid var(--rule); background: var(--panel); }
+    #chart { display: block; width: 100%; min-width: 48rem; height: 100%; }
+    #chart text { fill: var(--muted); font-family: "Avenir Next", Avenir, sans-serif; font-size: 13px; }
+    #chart .axis-title { fill: var(--ink); font-size: 14px; font-weight: 600; }
+    #chart .grid { stroke: var(--rule); stroke-width: 1; }
+    #chart .frame { fill: none; stroke: var(--muted); stroke-width: 1; }
+    #chart .trend { fill: none; stroke-width: 3; }
+    #chart .mark { stroke: var(--panel); stroke-width: 2; }
+    #chart .ram { fill: none; stroke-width: 3; }
+    [data-series].hidden { display: none; }
+    .chart-caption { display: flex; justify-content: space-between; gap: 2rem; margin-top: .8rem; color: var(--muted); font-size: .84rem; }
+    .results-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(2rem, 6vw, 6rem); }
+    .finding { padding-top: 1rem; border-top: 4px solid var(--ink); }
+    .finding h3 { font-size: 1.25rem; letter-spacing: -.015em; line-height: 1.25; }
+    .finding p { margin: .8rem 0 0; color: var(--muted); }
+    .finding strong { color: var(--ink); }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    th, td { padding: .8rem .65rem; border-bottom: 1px solid var(--rule); text-align: right; }
+    th { color: var(--muted); font-size: .76rem; letter-spacing: .06em; text-transform: uppercase; }
+    th:first-child, td:first-child { padding-left: 0; text-align: left; }
+    td:first-child { font-weight: 600; }
+    .table-scroll { overflow-x: auto; }
+    .table-scroll table { min-width: 46rem; }
+    .method { columns: 2; column-gap: clamp(3rem, 7vw, 7rem); }
+    .method p { break-inside: avoid; margin: 0 0 1.5rem; }
+    .method strong { display: block; color: var(--ink); }
+    footer { padding: 2.5rem 0 4rem; color: var(--muted); font-size: .9rem; }
+    footer nav { display: flex; flex-wrap: wrap; gap: 1.25rem; }
+    .error { padding: 1rem; color: #7d1e18; border: 1px solid #b95a52; background: #fff3ec; }
+    @media (max-width: 52rem) {
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric:nth-child(2) { border-right: 0; }
+      .metric:nth-child(-n+2) { border-bottom: 1px solid var(--rule); }
+      .section-head { grid-template-columns: 1fr; gap: 1.5rem; }
+      .results-grid { grid-template-columns: 1fr; }
+      .method { columns: 1; }
+      .chart-caption { display: block; }
+    }
+    @media (max-width: 32rem) {
+      .metrics { grid-template-columns: 1fr; }
+      .metric, .metric + .metric { min-height: 0; padding: 1.35rem 0; border-right: 0; border-bottom: 1px solid var(--rule); }
+      .metric:last-child { border-bottom: 0; }
+      .chart-shell { height: 65vh; }
+    }
+    @media (pointer: coarse) { .legend-button { min-height: 3rem; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to results</a>
+  <div class="page">
+    <header>
+      <p class="eyebrow">Qwen3.6-27B · Apple M5 · 32 GiB</p>
+      <h1>Speculation, measured.</h1>
+      <p class="lede"><strong>Uzu was the fastest practical configuration tested.</strong> oMLX gained substantially from speculative decoding, while long-context performance was governed as much by prefill and memory pressure as by decode speed.</p>
+    </header>
+
+    <div class="metrics" role="list" aria-label="Headline benchmark results">
+      <div class="metric" role="listitem"><strong>20.18</strong><span>Uzu mean decode tok/s in the 108-run short-context campaign</span></div>
+      <div class="metric" role="listitem"><strong>+140%</strong><span>OptiQ + 4-bit DFlash gain over its matching target-only baseline</span></div>
+      <div class="metric" role="listitem"><strong>40k</strong><span>largest clean Uzu prompt in the fixed-output context sweep</span></div>
+      <div class="metric" role="listitem"><strong>8 pairs</strong><span>latest matched-context Uzu vs MXFP4 + VLM MTP observations</span></div>
+    </div>
+
+    <main id="main">
+      <section aria-labelledby="chart-title">
+        <div class="section-head">
+          <h2 id="chart-title">Decode speed across context</h2>
+          <div class="section-copy">
+            <p>Each point is a fresh request with a fixed 512-token cap. Lines are simple least-squares trends, not performance guarantees. Click a legend item to isolate or compare implementations.</p>
+            <p><strong>Read RAM-stop crosses as capacity boundaries, not zero-throughput measurements.</strong> Failed and superseded pre-validation runs are excluded.</p>
+          </div>
+        </div>
+        <div class="chart-tools" role="group" aria-label="Toggle chart series">
+          <button class="legend-button" style="--series:var(--blue)" data-toggle="uzu-m-spec" aria-pressed="true">Uzu Mirai-M</button>
+          <button class="legend-button" style="--series:var(--orange)" data-toggle="omlx-optiq-dflash" aria-pressed="true">OptiQ + DFlash</button>
+          <button class="legend-button" style="--series:var(--magenta)" data-toggle="omlx-mxfp4-dflash-q4" aria-pressed="true">MXFP4 + DFlash</button>
+          <button class="legend-button" style="--series:var(--green)" data-toggle="omlx-mxfp4-vlm-mtp" aria-pressed="true">MXFP4 + VLM MTP</button>
+          <span class="ram-key">× RAM safety stop</span>
+        </div>
+        <div class="chart-shell"><svg id="chart" viewBox="0 0 1200 650" role="img" aria-labelledby="chart-title chart-desc"></svg></div>
+        <div class="chart-caption"><span id="chart-desc" aria-live="polite">Loading the curated benchmark snapshot…</span><span>Snapshot: 9 September 2026</span></div>
+      </section>
+
+      <section aria-labelledby="findings-title">
+        <div class="section-head">
+          <h2 id="findings-title">What survived scrutiny</h2>
+          <div class="section-copy"><p>The headline answer depends on workload. The formal campaign establishes short-context throughput; the fixed-context sweep exposes prefill and memory behavior; the latest continuous segment compares Uzu with the smaller VLM-MTP drafter.</p></div>
+        </div>
+        <div class="results-grid">
+          <article class="finding"><h3>Uzu leads overall</h3><p>Uzu averaged <strong>20.18 tok/s</strong> in the formal campaign. At 10k context it decoded <strong>19% faster</strong> than OptiQ + DFlash by arithmetic mean and delivered roughly <strong>2× end-to-end throughput</strong>.</p></article>
+          <article class="finding"><h3>Speculation helps oMLX—unevenly</h3><p>Against the same target checkpoints, 4-bit DFlash improved OptiQ by <strong>140%</strong>, repaired native MTP by <strong>112%</strong>, and BF16 DFlash improved MXFP4 by <strong>57%</strong>.</p></article>
+          <article class="finding"><h3>VLM MTP closes the decode gap</h3><p>Across eight matched random contexts from 2.5k to 23.6k, Uzu averaged <strong>17.37 tok/s</strong> and MXFP4 + VLM MTP averaged <strong>16.29 tok/s</strong>—a <strong>6.7%</strong> Uzu lead. VLM MTP's mean TTFT was <strong>11.2% lower</strong> in those pairs.</p></article>
+          <article class="finding"><h3>Long context is a memory test</h3><p>Under the no-swap fairness guard, Uzu stayed clean through <strong>40k</strong>, MXFP4 + 4-bit DFlash through <strong>30k</strong>, and OptiQ + DFlash through <strong>10k</strong>. Prefill cost deteriorated before decode collapsed.</p></article>
+        </div>
+      </section>
+
+      <section aria-labelledby="table-title">
+        <div class="section-head">
+          <h2 id="table-title">Formal campaign</h2>
+          <div class="section-copy"><p>Mean decode throughput over three prompts, 128- and 512-token outputs, and three measured repetitions per case. Speculative gain is always against the same oMLX target checkpoint.</p></div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Configuration</th><th>Decode tok/s</th><th>Gain</th><th>Efficiency signal</th><th>Min free RAM</th></tr></thead>
+            <tbody>
+              <tr><td>Uzu Mirai-M + bundled speculator</td><td>20.18</td><td>n/a</td><td>4.23 tok/verify</td><td>34%</td></tr>
+              <tr><td>oMLX OptiQ + 4-bit DFlash</td><td>15.37</td><td>+140.1%</td><td>65.4% acceptance</td><td>23%</td></tr>
+              <tr><td>oMLX OptiQ + repaired native MTP</td><td>13.56</td><td>+111.9%</td><td>85.5% acceptance</td><td>18%</td></tr>
+              <tr><td>oMLX MXFP4 + BF16 DFlash</td><td>12.85</td><td>+57.0%</td><td>65.6% acceptance</td><td>25%</td></tr>
+              <tr><td>oMLX MXFP4 target only</td><td>8.19</td><td>—</td><td>—</td><td>36%</td></tr>
+              <tr><td>oMLX OptiQ target only</td><td>6.40</td><td>—</td><td>—</td><td>26%</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="method-title">
+        <div class="section-head"><h2 id="method-title">Method, briefly</h2><div class="section-copy"><p>This harness prioritizes comparable requests over vendor-default benchmarks. The repository contains the exact prompts, runner, curated measurements, and detailed limitations.</p></div></div>
+        <div class="method">
+          <p><strong>Same request</strong>Identical messages and exact output caps; greedy temperature 0, top-p 1, top-k 1, and thinking disabled.</p>
+          <p><strong>No warm-cache advantage</strong>Request, prefix, paged, SSD, and DFlash caches disabled. A shared 512-token kernel warmup is excluded from timing.</p>
+          <p><strong>One model at a time</strong>Single request concurrency and one loaded target/drafter pair prevent cross-engine memory contention.</p>
+          <p><strong>Memory guard</strong>The active server is stopped below 12% free RAM or above 4 GiB campaign swap growth. Boundary attempts are not treated as successful measurements.</p>
+          <p><strong>Honest efficiency labels</strong>oMLX reports draft acceptance. Uzu reports target verification passes. Those counters explain behavior but are not presented as the same metric.</p>
+          <p><strong>Known limitation</strong>Uzu's bundled speculator cannot be disabled in the tested public CLI, so no within-Uzu speculative speedup is claimed.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <nav aria-label="Project links">
+        <a href="https://github.com/Maxim-Mazurok/uzu-omlx-specdecode-bench">Source and reproduction guide</a>
+        <a href="https://github.com/Maxim-Mazurok/uzu-omlx-specdecode-bench/blob/main/RESULTS.md">Detailed findings</a>
+        <a href="./data/continuous-results.json">Curated continuous data</a>
+        <a href="./data/full-benchmark.csv">Formal campaign CSV</a>
+      </nav>
+      <p>Independent local measurements; not affiliated with Uzu, Mirai, oMLX, or the model publishers. MIT licensed.</p>
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      const series = {
+        "uzu-m-spec": { color: "#0067b1", dash: "", shape: "circle" },
+        "omlx-optiq-dflash": { color: "#b85c00", dash: "9 5", shape: "square" },
+        "omlx-mxfp4-dflash-q4": { color: "#a53070", dash: "3 5", shape: "diamond" },
+        "omlx-mxfp4-vlm-mtp": { color: "#007a5a", dash: "12 4 3 4", shape: "triangle" }
+      };
+      const labels = Object.fromEntries([...document.querySelectorAll("[data-toggle]")].map(button => [button.dataset.toggle, button.textContent.trim()]));
+      const hiddenKey = "uzu-omlx-public-hidden-series";
+      let hidden = new Set();
+      try { hidden = new Set(JSON.parse(localStorage.getItem(hiddenKey) || "[]")); } catch (_) {}
+      let payload;
+
+      const esc = value => String(value).replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+      const regression = points => {
+        if (points.length < 2) return null;
+        const n = points.length;
+        const sx = points.reduce((sum, point) => sum + point.x, 0);
+        const sy = points.reduce((sum, point) => sum + point.y, 0);
+        const sxx = points.reduce((sum, point) => sum + point.x * point.x, 0);
+        const sxy = points.reduce((sum, point) => sum + point.x * point.y, 0);
+        const denominator = n * sxx - sx * sx;
+        if (!denominator) return null;
+        const slope = (n * sxy - sx * sy) / denominator;
+        return { slope, intercept: (sy - slope * sx) / n };
+      };
+      const marker = (shape, x, y, color, title) => {
+        const common = `class="mark" fill="${color}"><title>${esc(title)}</title>`;
+        if (shape === "square") return `<rect x="${x-5}" y="${y-5}" width="10" height="10" ${common}</rect>`;
+        if (shape === "diamond") return `<path d="M ${x} ${y-7} L ${x+7} ${y} L ${x} ${y+7} L ${x-7} ${y} Z" ${common}</path>`;
+        if (shape === "triangle") return `<path d="M ${x} ${y-7} L ${x+7} ${y+6} L ${x-7} ${y+6} Z" ${common}</path>`;
+        return `<circle cx="${x}" cy="${y}" r="5.5" ${common}</circle>`;
+      };
+      const draw = () => {
+        const svg = document.querySelector("#chart");
+        const rows = payload.rows;
+        const clean = rows.filter(row => row.status === "ok" && row.decode_tps != null);
+        const width = 1200, height = 650, left = 82, right = 34, top = 35, bottom = 72;
+        const pw = width - left - right, ph = height - top - bottom;
+        const maxX = Math.ceil(Math.max(...rows.map(row => row.context_tokens), 50000) / 10000) * 10000;
+        const maxY = Math.ceil(Math.max(...clean.map(row => row.decode_tps), 25) / 5) * 5;
+        const x = value => left + value / maxX * pw;
+        const y = value => top + ph - value / maxY * ph;
+        const parts = [`<rect class="frame" x="${left}" y="${top}" width="${pw}" height="${ph}"/>`];
+        for (let i = 0; i <= 5; i++) {
+          const valueY = maxY * i / 5, py = y(valueY);
+          const valueX = maxX * i / 5, px = x(valueX);
+          parts.push(`<line class="grid" x1="${left}" y1="${py}" x2="${left+pw}" y2="${py}"/><text x="${left-14}" y="${py+5}" text-anchor="end">${valueY.toFixed(0)}</text>`);
+          parts.push(`<line class="grid" x1="${px}" y1="${top}" x2="${px}" y2="${top+ph}"/><text x="${px}" y="${top+ph+28}" text-anchor="middle">${valueX ? `${Math.round(valueX/1000)}k` : "0"}</text>`);
+        }
+        Object.entries(series).forEach(([id, style]) => {
+          const points = clean.filter(row => row.variant === id).map(row => ({ x: Number(row.context_tokens), y: Number(row.decode_tps), row }));
+          const group = [];
+          const trend = regression(points);
+          if (trend) {
+            const x1 = Math.min(...points.map(point => point.x)), x2 = Math.max(...points.map(point => point.x));
+            group.push(`<line class="trend" x1="${x(x1)}" y1="${y(trend.slope*x1+trend.intercept)}" x2="${x(x2)}" y2="${y(trend.slope*x2+trend.intercept)}" stroke="${style.color}" stroke-dasharray="${style.dash}"/>`);
+          }
+          points.forEach(point => group.push(marker(style.shape, x(point.x), y(point.y), style.color, `${labels[id]} · ${point.x.toLocaleString()} context · ${point.y.toFixed(2)} tok/s · TTFT ${Number(point.row.ttft_seconds).toFixed(1)}s`)));
+          rows.filter(row => row.variant === id && row.status === "ram_limit").forEach(row => {
+            const px = x(Number(row.context_tokens)), py = top + ph - 10;
+            group.push(`<path class="ram" stroke="${style.color}" d="M ${px-7} ${py-7} L ${px+7} ${py+7} M ${px+7} ${py-7} L ${px-7} ${py+7}"><title>RAM safety stop · ${esc(labels[id])} · ${Number(row.context_tokens).toLocaleString()} context</title></path>`);
+          });
+          parts.push(`<g data-series="${id}" class="${hidden.has(id) ? "hidden" : ""}">${group.join("")}</g>`);
+        });
+        parts.push(`<text class="axis-title" x="${left+pw/2}" y="${height-13}" text-anchor="middle">Prompt context (tokens)</text>`);
+        parts.push(`<text class="axis-title" x="20" y="${top+ph/2}" text-anchor="middle" transform="rotate(-90 20 ${top+ph/2})">Decode speed (tokens/s)</text>`);
+        svg.innerHTML = parts.join("");
+        const attempts = rows.length;
+        const cleanCount = clean.length;
+        document.querySelector("#chart-desc").textContent = `${attempts} safety-filtered observations through attempt ${payload.benchmark.snapshot_attempt}; ${cleanCount} completed measurements and ${attempts-cleanCount} RAM stops.`;
+      };
+      document.querySelectorAll("[data-toggle]").forEach(button => {
+        const id = button.dataset.toggle;
+        button.setAttribute("aria-pressed", String(!hidden.has(id)));
+        button.addEventListener("click", () => {
+          hidden.has(id) ? hidden.delete(id) : hidden.add(id);
+          button.setAttribute("aria-pressed", String(!hidden.has(id)));
+          try { localStorage.setItem(hiddenKey, JSON.stringify([...hidden])); } catch (_) {}
+          if (payload) draw();
+        });
+      });
+      fetch("./data/continuous-results.json")
+        .then(response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); })
+        .then(data => { payload = data; draw(); })
+        .catch(error => { document.querySelector(".chart-shell").innerHTML = `<p class="error">The chart data could not be loaded (${esc(error.message)}). The CSV and JSON downloads remain available below.</p>`; });
+    })();
+  </script>
+</body>
+</html>
