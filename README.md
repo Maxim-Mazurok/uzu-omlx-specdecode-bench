@@ -181,11 +181,12 @@ caffeinate -dimsu python3 -u continuous_bench.py \
 One random context length is generated per round and used by both active
 engines. Engine order rotates deterministically between rounds. DFlash and
 OptiQ VLM-MTP are disabled for new attempts, but the chart continues to render
-all five series: Uzu, both historical DFlash targets, and both VLM MTP targets.
+Uzu, both historical DFlash targets, and MXFP4 VLM MTP.
 The campaign writes an append-only `events.jsonl`, per-attempt console logs,
 the runner's complete raw result directories/server logs, exact prompt
-definitions, and an atomically updated `chart.html`. The chart refreshes itself
-every 15 seconds when open.
+definitions, and an atomically updated `chart.html`. The chart fills 90% of the
+browser viewport, refreshes itself every 15 seconds, and lets you toggle each
+series from the legend; hidden-series choices survive refreshes.
 
 On a RAM safety stop, `specbench.py` terminates only the active model server;
 the continuous runner records the failure, waits for the configured delay, and

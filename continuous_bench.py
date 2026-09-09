@@ -34,7 +34,6 @@ ACTIVE_VARIANTS = (
 CHART_VARIANTS = (
     "uzu-m-spec",
     "omlx-optiq-dflash",
-    "omlx-optiq-vlm-mtp",
     "omlx-mxfp4-dflash-q4",
     "omlx-mxfp4-vlm-mtp",
 )
@@ -48,11 +47,10 @@ LABELS = {
     "omlx-mxfp4-vlm-mtp": "oMLX MXFP4 + VLM MTP 4-bit",
 }
 COLORS = {
-    "uzu-m-spec": "#4f8cff",
-    "omlx-optiq-dflash": "#f29b61",
-    "omlx-optiq-vlm-mtp": "#52c7a5",
-    "omlx-mxfp4-dflash-q4": "#d878b2",
-    "omlx-mxfp4-vlm-mtp": "#9b8cff",
+    "uzu-m-spec": "var(--series-uzu)",
+    "omlx-optiq-dflash": "var(--series-optiq-dflash)",
+    "omlx-mxfp4-dflash-q4": "var(--series-mxfp-dflash)",
+    "omlx-mxfp4-vlm-mtp": "var(--series-mxfp-vlm)",
 }
 SYSTEM = "Use the supplied reference context. Answer only the final request."
 UNIT = "The worker reads one block, validates its checksum, updates the index, and records latency. "
@@ -230,9 +228,20 @@ def render_chart(
         [int(segment["max_context"]) for segment in segments]
         + [int(row.get("context_tokens", 0)) for row in events]
     )
-    clean = [
+    chart_variants = [
+        variant
+        for variant in manifest.get("chart_variants", CHART_VARIANTS)
+        if variant in CHART_VARIANTS
+    ]
+    visible_events = [
         event
         for event in events
+        if event.get("variant") in chart_variants
+        and event.get("status") != "archived"
+    ]
+    clean = [
+        event
+        for event in visible_events
         if event.get("status") == "ok" and event.get("decode_tps") is not None
     ]
     maximum_tps = max((float(row["decode_tps"]) for row in clean), default=20.0)
@@ -263,9 +272,9 @@ def render_chart(
             f'<text x="{x:.1f}" y="{top+plot_height+25}" text-anchor="middle">{value/1000:.0f}k</text>'
         )
 
-    marks: list[str] = []
+    marks: dict[str, list[str]] = {variant: [] for variant in chart_variants}
     legend: list[str] = []
-    for variant in manifest.get("chart_variants", CHART_VARIANTS):
+    for variant in chart_variants:
         color = COLORS[variant]
         points = [
             (float(row["context_tokens"]), float(row["decode_tps"]))
@@ -278,7 +287,7 @@ def render_chart(
             x1, x2 = min(x for x, _ in points), max(x for x, _ in points)
             y1 = max(0.0, min(y_max, slope * x1 + intercept))
             y2 = max(0.0, min(y_max, slope * x2 + intercept))
-            marks.append(
+            marks[variant].append(
                 f'<line x1="{sx(x1):.1f}" y1="{sy(y1):.1f}" '
                 f'x2="{sx(x2):.1f}" y2="{sy(y2):.1f}" '
                 f'stroke="{color}" class="trend"/>'
@@ -290,16 +299,21 @@ def render_chart(
                 f"{LABELS[variant]} · {row['context_tokens']:,} context · "
                 f"{row['decode_tps']:.2f} tok/s · TTFT {row['ttft_seconds']:.1f}s"
             )
-            marks.append(
+            marks[variant].append(
                 f'<circle cx="{sx(float(row["context_tokens"])):.1f}" '
                 f'cy="{sy(float(row["decode_tps"])):.1f}" r="5.5" fill="{color}">'
                 f"<title>{title}</title></circle>"
             )
         legend.append(
-            f'<span><i style="background:{color}"></i>{html.escape(LABELS[variant])}</span>'
+            f'<button type="button" class="legend-item" '
+            f'data-toggle-series="{variant}" aria-pressed="true">'
+            f'<i style="background:{color}"></i>'
+            f'<span>{html.escape(LABELS[variant])}</span></button>'
         )
 
-    ram_stops = [row for row in events if row.get("status") == "ram_limit"]
+    ram_stops = [
+        row for row in visible_events if row.get("status") == "ram_limit"
+    ]
     for row in ram_stops:
         x = sx(float(row["context_tokens"]))
         y = top + plot_height - 9
@@ -307,7 +321,7 @@ def render_chart(
             f"RAM stop · {LABELS[row['variant']]} · {row['context_tokens']:,} context · "
             f"{row.get('detail') or 'safety guard'}"
         )
-        marks.append(
+        marks[row["variant"]].append(
             f'<g stroke="{COLORS[row["variant"]]}" class="ram-stop">'
             f'<line x1="{x-6:.1f}" y1="{y-6:.1f}" x2="{x+6:.1f}" y2="{y+6:.1f}"/>'
             f'<line x1="{x+6:.1f}" y1="{y-6:.1f}" x2="{x-6:.1f}" y2="{y+6:.1f}"/>'
@@ -315,7 +329,7 @@ def render_chart(
         )
 
     recent_rows: list[str] = []
-    for row in reversed(events[-15:]):
+    for row in reversed(visible_events[-15:]):
         speed = (
             f"{float(row['decode_tps']):.2f}"
             if row.get("decode_tps") is not None
@@ -336,38 +350,66 @@ def render_chart(
             f"<td class=\"status-{html.escape(row['status'])}\">{html.escape(row['status'])}</td>"
             "</tr>"
         )
-    last = events[-1] if events else None
+    last = visible_events[-1] if visible_events else None
     last_text = (
         f"Last attempt: {LABELS[last['variant']]} at {last['context_tokens']:,} tokens — {last['status']}"
         if last
         else "Waiting for the first benchmark"
     )
     document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="15"><title>Continuous local-model benchmark</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Continuous local-model benchmark</title>
 <style>
-:root{{color-scheme:light dark;font-family:ui-sans-serif,system-ui,sans-serif;background:#111;color:#eee}}
-body{{margin:24px;max-width:1180px}}h1{{font-size:22px;margin:0 0 6px}}p{{color:#aaa;margin:4px 0 16px}}
-.legend{{display:flex;gap:20px;flex-wrap:wrap;margin:8px 0 10px}}.legend span{{display:flex;align-items:center;gap:7px}}
-.legend i{{width:18px;height:3px;display:inline-block}}svg{{width:100%;height:auto;display:block;background:#151515}}
-svg text{{fill:#bbb;font-size:12px}}.grid{{stroke:#333;stroke-width:1}}.frame{{fill:none;stroke:#444}}
-.trend{{stroke-width:2;stroke-dasharray:6 4;opacity:.7}}circle{{stroke:#111;stroke-width:1.5}}.ram-stop{{stroke-width:3}}
-.axis-title{{fill:#eee;font-size:13px}}table{{width:100%;border-collapse:collapse;margin-top:18px;font-size:13px}}
-th,td{{padding:7px 9px;border-bottom:1px solid #333;text-align:right}}th:nth-child(3),td:nth-child(3),th:last-child,td:last-child{{text-align:left}}
-.status-ok{{color:#83d39b}}.status-ram_limit,.status-error,.status-memory_recovery_timeout{{color:#ff8d86}}
-@media(prefers-color-scheme:light){{:root{{background:#fff;color:#171717}}p{{color:#666}}svg{{background:#fafafa}}svg text{{fill:#555}}.grid{{stroke:#ddd}}.frame{{stroke:#bbb}}circle{{stroke:#fff}}th,td{{border-color:#ddd}}.axis-title{{fill:#171717}}}}
+:root{{color-scheme:dark;font-family:"Avenir Next",Avenir,"Helvetica Neue",sans-serif;background:#10161c;color:#edf4f7;--surface:#151d25;--muted:#a8bac4;--grid:#33434d;--frame:#59707c;--series-uzu:#4db8ff;--series-optiq-dflash:#ffb000;--series-mxfp-dflash:#ff65c3;--series-mxfp-vlm:#45d483}}
+*{{box-sizing:border-box}}body{{width:90vw;margin:clamp(18px,5vh,52px) auto;padding-bottom:max(28px,env(safe-area-inset-bottom))}}h1{{font-size:clamp(21px,2vw,30px);letter-spacing:-.025em;margin:0 0 5px}}p{{color:var(--muted);margin:4px 0 14px;max-width:100ch}}
+.legend{{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 12px}}.legend-item{{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:7px 11px;border:1px solid var(--grid);background:var(--surface);color:inherit;font:inherit;cursor:pointer}}
+.legend-item i{{width:22px;height:4px;display:inline-block}}.legend-item:hover{{border-color:var(--muted)}}.legend-item:active{{transform:translateY(1px)}}.legend-item:focus-visible{{outline:3px solid #f5d547;outline-offset:2px}}.legend-item[aria-pressed="false"]{{opacity:.4;text-decoration:line-through}}.legend-key{{display:inline-flex;align-items:center;min-height:36px;padding:7px 5px;color:var(--muted)}}
+.chart-shell{{width:90vw;height:90vh;min-height:420px;background:var(--surface)}}svg{{width:100%;height:100%;display:block}}
+svg text{{fill:var(--muted);font-size:12px}}.grid{{stroke:var(--grid);stroke-width:1}}.frame{{fill:none;stroke:var(--frame)}}
+.trend{{stroke-width:2.5;stroke-dasharray:7 5;opacity:.82}}circle{{stroke:var(--surface);stroke-width:2}}.ram-stop{{stroke-width:3}}[data-series].is-hidden{{display:none}}
+.axis-title{{fill:#edf4f7;font-size:13px;font-weight:600}}.table-shell{{width:90vw;overflow-x:auto;margin-top:18px}}table{{width:100%;min-width:720px;border-collapse:collapse;font-size:13px}}
+th,td{{padding:8px 9px;border-bottom:1px solid var(--grid);text-align:right}}th{{color:var(--muted);font-weight:600}}th:nth-child(3),td:nth-child(3),th:last-child,td:last-child{{text-align:left}}
+.status-ok{{color:#62df95}}.status-ram_limit,.status-error,.status-memory_recovery_timeout{{color:#ff7d78}}
+@media(pointer:coarse){{.legend-item{{min-height:44px;padding:10px 13px}}}}
+@media(prefers-color-scheme:light){{:root{{color-scheme:light;background:#f3f0e8;color:#182127;--surface:#fbfaf5;--muted:#53646d;--grid:#c7d0d1;--frame:#84969d;--series-uzu:#006ebd;--series-optiq-dflash:#a45f00;--series-mxfp-dflash:#b51f78;--series-mxfp-vlm:#087a4a}}.axis-title{{fill:#182127}}circle{{stroke:var(--surface)}}.status-ok{{color:#087a4a}}.status-ram_limit,.status-error,.status-memory_recovery_timeout{{color:#b3261e}}}}
 </style></head><body>
 <h1>Continuous decode speed vs context</h1>
 <p>{html.escape(last_text)} · {html.escape(sampling_text)} · seed {int(current_segment['seed'])} · fixed {int(current_segment['output_tokens'])}-token output · segment {current_segment_index + 1} · refreshes every 15s</p>
-<div class="legend">{''.join(legend)}<span>× RAM safety stop</span></div>
+<div class="legend" role="group" aria-label="Toggle chart series">{''.join(legend)}<span class="legend-key">× RAM safety stop</span></div>
+<div class="chart-shell">
 <svg viewBox="0 0 {width} {height}" role="img" aria-label="Decode throughput scatter plot with per-engine trend lines">
 <rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" class="frame"/>
-{''.join(grid)}{''.join(marks)}
+{''.join(grid)}{''.join(f'<g data-series="{variant}">{"".join(marks[variant])}</g>' for variant in chart_variants)}
 <text x="{left+plot_width/2:.1f}" y="{top+plot_height+58}" text-anchor="middle" class="axis-title">Prompt context (tokens)</text>
 <text x="20" y="{top+plot_height/2:.1f}" text-anchor="middle" transform="rotate(-90 20 {top+plot_height/2:.1f})" class="axis-title">Decode speed (tokens/s)</text>
 </svg>
-<table><thead><tr><th>Attempt</th><th>Round</th><th>Engine</th><th>Context</th><th>tok/s</th><th>TTFT</th><th>Status</th></tr></thead>
-<tbody>{''.join(recent_rows)}</tbody></table>
+</div>
+<div class="table-shell"><table><thead><tr><th>Attempt</th><th>Round</th><th>Engine</th><th>Context</th><th>tok/s</th><th>TTFT</th><th>Status</th></tr></thead>
+<tbody>{''.join(recent_rows)}</tbody></table></div>
+<script>
+(() => {{
+  const storageKey = "continuous-bench-hidden-series";
+  let hidden = new Set();
+  try {{ hidden = new Set(JSON.parse(localStorage.getItem(storageKey) || "[]")); }} catch (_) {{}}
+  const apply = (id, visible) => {{
+    document.querySelectorAll("[data-series]").forEach((node) => {{
+      if (node.dataset.series === id) node.classList.toggle("is-hidden", !visible);
+    }});
+    const button = document.querySelector(`[data-toggle-series="${{id}}"]`);
+    if (button) button.setAttribute("aria-pressed", String(visible));
+  }};
+  document.querySelectorAll("[data-toggle-series]").forEach((button) => {{
+    const id = button.dataset.toggleSeries;
+    apply(id, !hidden.has(id));
+    button.addEventListener("click", () => {{
+      if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
+      apply(id, !hidden.has(id));
+      try {{ localStorage.setItem(storageKey, JSON.stringify([...hidden])); }} catch (_) {{}}
+    }});
+  }});
+  window.setTimeout(() => window.location.reload(), 15000);
+}})();
+</script>
 </body></html>"""
     atomic_write(path, document)
 

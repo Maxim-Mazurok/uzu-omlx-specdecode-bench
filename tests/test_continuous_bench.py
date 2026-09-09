@@ -91,8 +91,14 @@ class ContinuousBenchTests(unittest.TestCase):
             self.assertIn("20.00 tok/s", text)
             self.assertIn("RAM stop", text)
             self.assertIn("refresh", text)
-            self.assertIn("oMLX OptiQ + VLM MTP 4-bit", text)
+            self.assertNotIn("oMLX OptiQ + VLM MTP 4-bit", text)
             self.assertIn("oMLX MXFP4 + VLM MTP 4-bit", text)
+            self.assertIn('data-toggle-series="uzu-m-spec"', text)
+            self.assertIn("continuous-bench-hidden-series", text)
+            self.assertIn("width:90vw", text)
+            self.assertIn("height:90vh", text)
+            self.assertIn("window.location.reload()", text)
+            self.assertNotIn('http-equiv="refresh"', text)
 
     def test_changed_range_becomes_new_segment_after_partial_round(self):
         with tempfile.TemporaryDirectory() as temporary:
