@@ -2,10 +2,12 @@
 
 ## Reporting a problem
 
-Please use GitHub's private vulnerability-reporting form in the repository's
-**Security** tab. Do not open a public issue for credentials, private network
-information, path disclosure, unsafe process handling, or a reproducible way
-to make the runner execute unintended commands.
+Use GitHub's private vulnerability-reporting form in the repository's
+**Security** tab when it is available. Otherwise, open a minimal issue asking
+the maintainer for a private contact channel without including sensitive
+details. Do not publish credentials, private network information, path
+disclosure, unsafe process handling, or a reproducible way to make the runner
+execute unintended commands.
 
 ## Supported version
 
