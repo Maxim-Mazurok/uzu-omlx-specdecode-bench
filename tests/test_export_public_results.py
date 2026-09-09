@@ -16,9 +16,9 @@ class PublicExportTests(unittest.TestCase):
                     "completion_tokens": 512,
                     "decode_tps": 20.0,
                     "status": "ok",
-                    "attempt_log": "machine-local/run.log",
-                    "run_dir": "machine-local/results",
-                    "detail": "host machine-local-address",
+                    "attempt_log": "machine-local-log",
+                    "run_dir": "machine-local-results",
+                    "detail": "machine-local-address",
                     "text": "generated output",
                 }
             ]
