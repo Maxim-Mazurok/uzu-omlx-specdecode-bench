@@ -22,13 +22,14 @@ Results = "https://maxim-mazurok.github.io/uzu-omlx-specdecode-bench/"
 [project.scripts]
 specbench = "specbench:main"
 continuous-specbench = "continuous_bench:main"
+context-limit-probe = "context_limit_probe:main"
 
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["specbench", "continuous_bench"]
+py-modules = ["specbench", "continuous_bench", "context_limit_probe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

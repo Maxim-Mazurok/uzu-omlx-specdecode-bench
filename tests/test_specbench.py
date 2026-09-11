@@ -117,6 +117,50 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(settings["dflash_enabled"])
         self.assertFalse(settings["mtp_enabled"])
 
+    def test_turboquant_settings_are_explicitly_opt_in(self):
+        disabled = specbench.omlx_settings(
+            {"model": "target", "speculative": "off"},
+            Path("/draft/dflash"),
+            Path("/draft/qwen36-mtp"),
+        )["models"]["target"]
+        enabled = specbench.omlx_settings(
+            {
+                "model": "target",
+                "speculative": "off",
+                "turboquant_kv_enabled": True,
+                "turboquant_kv_bits": 4,
+                "turboquant_skip_last": True,
+            },
+            Path("/draft/dflash"),
+            Path("/draft/qwen36-mtp"),
+        )["models"]["target"]
+
+        self.assertFalse(disabled["turboquant_kv_enabled"])
+        self.assertTrue(enabled["turboquant_kv_enabled"])
+        self.assertEqual(enabled["turboquant_kv_bits"], 4.0)
+        self.assertTrue(enabled["turboquant_skip_last"])
+
+    def test_vlm_mtp_with_turboquant_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not support"):
+            specbench.omlx_settings(
+                {
+                    "model": "target",
+                    "speculative": "vlm-mtp",
+                    "turboquant_kv_enabled": True,
+                },
+                Path("/draft/dflash"),
+                Path("/draft/qwen36-mtp"),
+            )
+
+    def test_rejected_omlx_settings_are_detected_in_startup_log(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            log_path = Path(temporary_directory) / "server.log"
+            log_path.write_text(
+                "Failed to load settings for model 'target': incompatible settings\n"
+            )
+            with self.assertRaisesRegex(RuntimeError, "rejected"):
+                specbench.validate_omlx_startup_log(log_path)
+
     def test_memory_limits_reject_low_free_ram(self):
         with self.assertRaisesRegex(RuntimeError, "only 5% memory free"):
             specbench.enforce_memory_limits(

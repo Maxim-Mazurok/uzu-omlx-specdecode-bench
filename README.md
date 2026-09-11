@@ -19,15 +19,15 @@ and memory guards aligned across [Uzu](https://github.com/trymirai/uzu) and
 Measured on a base Apple M5 Mac with 32 GiB unified memory. These are local
 single-stream measurements, not universal model or engine rankings.
 
-| Finding | Result |
-|---|---:|
-| Fastest formal-campaign configuration | **Uzu, 20.18 decode tok/s** |
-| Fastest oMLX configuration | **OptiQ + 4-bit DFlash, 15.37 tok/s** |
-| OptiQ + DFlash gain vs the same target | **+140.1%** |
-| OptiQ + repaired native MTP gain | **+111.9%** |
-| 10k-context decode lead, Uzu vs OptiQ + DFlash | **+19.0%** |
-| Latest matched-context lead, Uzu vs MXFP4 + VLM MTP | **+6.7%** |
-| Largest clean fixed-output context under the RAM guard | **Uzu: 40k** |
+| Finding                                                |                                Result |
+| ------------------------------------------------------ | ------------------------------------: |
+| Fastest formal-campaign configuration                  |           **Uzu, 20.18 decode tok/s** |
+| Fastest oMLX configuration                             | **OptiQ + 4-bit DFlash, 15.37 tok/s** |
+| OptiQ + DFlash gain vs the same target                 |                           **+140.1%** |
+| OptiQ + repaired native MTP gain                       |                           **+111.9%** |
+| 10k-context decode lead, Uzu vs OptiQ + DFlash         |                            **+19.0%** |
+| Latest matched-context lead, Uzu vs MXFP4 + VLM MTP    |                             **+6.7%** |
+| Largest clean fixed-output context under the RAM guard |                          **Uzu: 40k** |
 
 See [RESULTS.md](RESULTS.md) for the synthesis and caveats, or drill into the
 individual campaigns:
@@ -40,11 +40,11 @@ individual campaigns:
 
 ## What is compared
 
-| Target checkpoint | Target-only baseline | Speculative paths |
-|---|---|---|
-| Uzu Mirai-M-4 | Not exposed by tested CLI | Bundled Mirai-M speculator |
-| oMLX MXFP4 | Yes | DFlash; external VLM MTP |
-| oMLX OptiQ-4bit | Yes | DFlash; repaired native Lightning MTP; external VLM MTP |
+| Target checkpoint | Target-only baseline      | Speculative paths                                       |
+| ----------------- | ------------------------- | ------------------------------------------------------- |
+| Uzu Mirai-M-4     | Not exposed by tested CLI | Bundled Mirai-M speculator                              |
+| oMLX MXFP4        | Yes                       | DFlash; external VLM MTP                                |
+| oMLX OptiQ-4bit   | Yes                       | DFlash; repaired native Lightning MTP; external VLM MTP |
 
 The tested Uzu 0.5.26 CLI requires its bundled speculator and has no public
 switch to disable it. The harness therefore reports Uzu verification efficiency
@@ -110,6 +110,31 @@ python3 specbench.py run \
   --output-tokens 128,512 \
   --repetitions 3
 ```
+
+## Context-limit probe
+
+The context-limit probe starts at 256K tokens, checks the 128K requirement
+after a RAM stop, then bisects the clean/failing interval to roughly 8K-token
+precision. It uses target-only MXFP4 with 4-bit TurboQuant KV cache and forced
+memory-safe tiled head-dim-256 prefill by default. oMLX 0.6.4 does not allow
+VLM-MTP and TurboQuant on the same model. The probe preserves an append-only
+result ledger for resume. It checks 128K before attempting 256K and stops when
+new swap exceeds 0.5 GiB by default.
+
+```sh
+caffeinate -dimsu python3 -u context_limit_probe.py
+```
+
+Preview the next context without loading the model:
+
+```sh
+python3 context_limit_probe.py --prepare-only
+```
+
+Every attempt uses a fresh server, no duplicate warmup prefill, 16 output
+tokens, a two-hour request timeout, the existing 12%-free-RAM and
+4-GiB-swap-growth guards, and exact prompt-token validation. A safety stop is a
+failing boundary, not a successful benchmark result.
 
 ## Continuous context sweep
 
@@ -177,16 +202,16 @@ target-pass cost, and memory traffic can outweigh the saved target passes.
 
 ## Repository layout
 
-| Path | Purpose |
-|---|---|
-| [`specbench.py`](specbench.py) | Paired benchmark runner and report generator |
-| [`continuous_bench.py`](continuous_bench.py) | Deterministic resumable context sweep |
-| [`benchmark.json`](benchmark.json) | Engines, checkpoints, controls, and RAM limits |
-| [`prompts.jsonl`](prompts.jsonl) | Short benchmark prompts |
-| [`context_sweep_prompts.jsonl`](context_sweep_prompts.jsonl) | Exact context checkpoints |
-| [`export_public_results.py`](export_public_results.py) | Privacy-preserving public-data exporter |
-| [`docs/`](docs/) | Static GitHub Pages report and curated datasets |
-| [`tests/`](tests/) | Unit tests for parsing, guards, scheduling, and export |
+| Path                                                         | Purpose                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| [`specbench.py`](specbench.py)                               | Paired benchmark runner and report generator           |
+| [`continuous_bench.py`](continuous_bench.py)                 | Deterministic resumable context sweep                  |
+| [`benchmark.json`](benchmark.json)                           | Engines, checkpoints, controls, and RAM limits         |
+| [`prompts.jsonl`](prompts.jsonl)                             | Short benchmark prompts                                |
+| [`context_sweep_prompts.jsonl`](context_sweep_prompts.jsonl) | Exact context checkpoints                              |
+| [`export_public_results.py`](export_public_results.py)       | Privacy-preserving public-data exporter                |
+| [`docs/`](docs/)                                             | Static GitHub Pages report and curated datasets        |
+| [`tests/`](tests/)                                           | Unit tests for parsing, guards, scheduling, and export |
 
 ## Scope and limitations
 

@@ -22,7 +22,10 @@
     "min_p": 0.0,
     "seed": null,
     "enable_thinking": false,
-    "output_tokens": [128, 512],
+    "output_tokens": [
+      128,
+      512
+    ],
     "repetitions": 3,
     "warmup_tokens": 512,
     "cooldown_seconds": 15,
@@ -77,6 +80,18 @@
       "model": "Qwen3.6-27B-MXFP4",
       "speculative": "vlm-mtp",
       "vlm_mtp_draft_block_size": 3,
+      "baseline": "omlx-mxfp4-base",
+      "default_run": false
+    },
+    {
+      "id": "omlx-mxfp4-turboquant",
+      "engine": "omlx",
+      "model": "Qwen3.6-27B-MXFP4",
+      "speculative": "off",
+      "turboquant_kv_enabled": true,
+      "turboquant_kv_bits": 4,
+      "turboquant_skip_last": true,
+      "omlx_sdpa256_tiled": true,
       "baseline": "omlx-mxfp4-base",
       "default_run": false
     },

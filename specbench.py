@@ -124,17 +124,28 @@ def wait_ready(base_url: str, proc: subprocess.Popen[Any], timeout: float) -> No
     raise TimeoutError(f"server did not become ready: {last_error}")
 
 
+def validate_omlx_startup_log(log_path: Path) -> None:
+    log_content = log_path.read_text(errors="replace")
+    if "Failed to load settings for model" in log_content:
+        raise RuntimeError("oMLX rejected the benchmark model settings")
+
+
 def omlx_settings(
     variant: dict[str, Any], dflash_draft: Path, vlm_mtp_draft: Path
 ) -> dict[str, Any]:
     spec = variant["speculative"]
+    turboquant_enabled = bool(variant.get("turboquant_kv_enabled", False))
+    if spec == "vlm-mtp" and turboquant_enabled:
+        raise ValueError("oMLX does not support VLM-MTP with TurboQuant KV")
     settings: dict[str, Any] = {
         "max_tokens": 32768,
         "force_sampling": False,
         "enable_thinking": False,
         "thinking_budget_enabled": False,
         "guided_grammar_enabled": False,
-        "turboquant_kv_enabled": False,
+        "turboquant_kv_enabled": turboquant_enabled,
+        "turboquant_kv_bits": float(variant.get("turboquant_kv_bits", 4)),
+        "turboquant_skip_last": bool(variant.get("turboquant_skip_last", True)),
         "qwen35_ane_prefill_enabled": False,
         "specprefill_enabled": False,
         "dflash_enabled": spec == "dflash",
@@ -367,14 +378,23 @@ def server(
     (variant_dir / "server-command.json").write_text(json.dumps(cmd, indent=2) + "\n")
     with log_path.open("ab", buffering=0) as log:
         try:
+            environment = os.environ.copy()
+            if variant.get("omlx_sdpa256_tiled"):
+                environment["OMLX_SDPA256_TILED"] = "1"
             proc = subprocess.Popen(
-                cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+                cmd,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=environment,
             )
             wait_ready(
                 base_url,
                 proc,
                 float(config["common"]["server_start_timeout_seconds"]),
             )
+            if engine == "omlx":
+                validate_omlx_startup_log(log_path)
             yield base_url, log_path, proc.pid
         except Exception:
             tail = log_path.read_text(errors="replace")[-8000:]
@@ -1043,6 +1063,12 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any]) -> int:
         common["warmup_tokens"] = args.warmup_tokens
     if getattr(args, "cooldown_seconds", None) is not None:
         common["cooldown_seconds"] = args.cooldown_seconds
+    if getattr(args, "request_timeout_seconds", None) is not None:
+        common["request_timeout_seconds"] = args.request_timeout_seconds
+    if getattr(args, "maximum_swap_growth_gib", None) is not None:
+        common["max_swap_growth_gib"] = args.maximum_swap_growth_gib
+    if getattr(args, "memory_watch_interval_seconds", None) is not None:
+        common["memory_watch_interval_seconds"] = args.memory_watch_interval_seconds
     output_tokens = (
         [int(x) for x in args.output_tokens.split(",")]
         if args.output_tokens
@@ -1206,6 +1232,22 @@ def parser() -> argparse.ArgumentParser:
         "--cooldown-seconds",
         type=float,
         help="override the delay between selected variants",
+    )
+    run.add_argument(
+        "--request-timeout-seconds",
+        type=float,
+        help="override the per-request timeout",
+    )
+    run.add_argument(
+        "--max-swap-growth-gib",
+        dest="maximum_swap_growth_gib",
+        type=float,
+        help="override the campaign swap growth limit",
+    )
+    run.add_argument(
+        "--memory-watch-interval-seconds",
+        type=float,
+        help="override the memory watchdog polling interval",
     )
     run.add_argument(
         "--vlm-mtp-block-size",
